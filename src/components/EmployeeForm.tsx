@@ -1,11 +1,11 @@
 import { saveEmployee } from "@/app/(app)/employees/actions";
 
-type Emp = { id: string; employee_code: string; full_name: string; phone: string | null; designation: string | null; gym_id: string; joining_date: string; weekly_off: number };
+type Emp = { id: string; employee_code: string; full_name: string; phone: string | null; designation: string | null; shift_id?: string | null; gym_id: string; joining_date: string; weekly_off: number };
 
 export function EmployeeForm({
-  emp, gyms, canSetSalary, currentSalary, error,
+  emp, gyms, shifts, canSetSalary, currentSalary, error,
 }: {
-  emp?: Emp; gyms: { id: string; name: string }[]; canSetSalary: boolean; currentSalary?: number | null; error?: string;
+  emp?: Emp; gyms: { id: string; name: string }[]; shifts: { id: string; name: string; gym_id: string }[]; canSetSalary: boolean; currentSalary?: number | null; error?: string;
 }) {
   const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   return (
@@ -23,6 +23,17 @@ export function EmployeeForm({
         <select name="gym_id" required defaultValue={emp?.gym_id ?? ""} className="input">
           <option value="" disabled>Select gym</option>
           {gyms.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+      </div>
+      <div>
+        <label className="label">Shift</label>
+        <select name="shift_id" defaultValue={emp?.shift_id ?? ""} className="input">
+          <option value="">No shift</option>
+          {gyms.map((g) => (
+            <optgroup key={g.id} label={g.name}>
+              {shifts.filter((s) => s.gym_id === g.id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </optgroup>
+          ))}
         </select>
       </div>
       <div><label className="label">Joining date</label><input name="joining_date" type="date" required defaultValue={emp?.joining_date} className="input" /></div>

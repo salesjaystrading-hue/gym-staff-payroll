@@ -23,7 +23,9 @@ export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
   if (!data?.claims && !isPublic) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    const url = new URL("/login", request.url);
+    if (path !== "/") url.searchParams.set("next", path + request.nextUrl.search);
+    return NextResponse.redirect(url);
   }
   return response;
 }

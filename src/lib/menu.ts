@@ -1,14 +1,14 @@
 import type { Perms, Role } from "./session";
 
-export type MenuItem = { href: string; label: string; soon?: boolean };
+export type MenuItem = { href: string; label: string };
 
 export function menuFor(role: Role, perms: Perms): MenuItem[] {
   if (role === "staff") {
     return [
       { href: "/dashboard", label: "Home" },
-      { href: "/soon/attendance", label: "Attendance", soon: true },
-      { href: "/soon/leave", label: "Leave", soon: true },
-      { href: "/soon/salary", label: "Salary", soon: true },
+      { href: "/attendance", label: "Attendance" },
+      { href: "/leave", label: "Leave" },
+      { href: "/salary", label: "Salary" },
       { href: "/profile", label: "Profile" },
     ];
   }
@@ -16,13 +16,11 @@ export function menuFor(role: Role, perms: Perms): MenuItem[] {
     { href: "/dashboard", label: "Dashboard" },
     { href: "/gyms", label: role === "admin" ? "Gyms" : "My gyms" },
     { href: "/employees", label: "Employees" },
-    { href: "/soon/attendance", label: "Attendance", soon: true },
-    { href: "/soon/leave", label: "Leave", soon: true },
+    { href: "/attendance", label: "Attendance" },
+    { href: "/leave", label: "Leave" },
   ];
-  if (role === "admin" || perms.can_view_salaries || perms.can_approve_payroll) {
-    items.push({ href: "/soon/payroll", label: "Payroll", soon: true });
-  }
-  items.push({ href: "/soon/reports", label: "Reports", soon: true });
+  if (perms.can_approve_payroll || perms.can_view_salaries) items.push({ href: "/payroll", label: "Payroll" });
+  if (perms.can_configure_salary || perms.can_approve_payroll) items.push({ href: "/advances", label: "Advances & bonus" });
   if (role === "admin") items.push({ href: "/users", label: "Users & permissions" });
   return items;
 }

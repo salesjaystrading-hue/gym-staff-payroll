@@ -21,7 +21,7 @@ export function Nav({ items, staff }: { items: MenuItem[]; staff: boolean }) {
             }`}
           >
             {i.label}
-            {i.soon && <span className="ml-2 text-[10px] opacity-60">soon</span>}
+            
           </Link>
         ))}
       </nav>

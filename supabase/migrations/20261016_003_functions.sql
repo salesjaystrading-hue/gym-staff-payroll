@@ -2,13 +2,19 @@
 
 create function public.rotate_gym_qr(p_gym uuid) returns text
 language plpgsql security definer set search_path = '' as $$
-declare t text := replace(gen_random_uuid()::text, '-', '');
+declare t text := replace(gen_random_uuid()::text, '-', ''); v_old text;
 begin
   if not (private.manages_gym(p_gym) and private.has_perm('can_edit_attendance')) then
     raise exception 'Not allowed';
   end if;
-  delete from public.gym_qr_tokens where expires_at < now() - interval '5 minutes';
-  insert into public.gym_qr_tokens (token, gym_id, expires_at) values (t, p_gym, now() + interval '75 seconds');
+  -- reuse an expired row instead of deleting, so the table stays tiny
+  select token into v_old from public.gym_qr_tokens
+    where gym_id = p_gym and expires_at < now() order by expires_at limit 1 for update skip locked;
+  if v_old is not null then
+    update public.gym_qr_tokens set token = t, expires_at = now() + interval '75 seconds' where token = v_old;
+  else
+    insert into public.gym_qr_tokens (token, gym_id, expires_at) values (t, p_gym, now() + interval '75 seconds');
+  end if;
   return t;
 end $$;
 
@@ -50,6 +56,23 @@ begin
     return jsonb_build_object('ok', false, 'message', 'This is not your registered phone. Ask your manager to reset it.');
   end if;
 
+  -- an open check-in from the last 16 hours means this scan is the check-out (also covers leaving after midnight or after shift end)
+  select * into v_att from public.attendance
+    where employee_id = v_emp.id and check_in is not null and check_out is null and check_in > v_now - interval '16 hours'
+    order by check_in desc limit 1;
+  if found then
+    if v_now - v_att.check_in < interval '10 minutes' then
+      return jsonb_build_object('ok', false, 'message', 'You are already checked in. Scan again when you leave.');
+    end if;
+    update public.attendance set check_out = v_now where id = v_att.id;
+    return jsonb_build_object('ok', true, 'action', 'check_out',
+      'message', 'Checked out at ' || to_char(v_local, 'HH12:MI AM'));
+  end if;
+
+  if exists (select 1 from public.attendance where employee_id = v_emp.id and check_out is not null and check_out > v_now - interval '4 hours') then
+    return jsonb_build_object('ok', false, 'message', 'You have already checked out. Ask your manager if this is a mistake.');
+  end if;
+
   v_wd := v_local::date;
   if v_emp.shift_id is not null then
     select * into v_sh from public.shifts where id = v_emp.shift_id;
@@ -77,14 +100,6 @@ begin
 
   if v_att.check_in is null then
     return jsonb_build_object('ok', false, 'message', 'Your manager has already marked today as ' || replace(v_att.status::text, '_', ' ') || '.');
-  end if;
-  if v_att.check_out is null then
-    if v_now - v_att.check_in < interval '10 minutes' then
-      return jsonb_build_object('ok', false, 'message', 'You are already checked in. Scan again when you leave.');
-    end if;
-    update public.attendance set check_out = v_now where id = v_att.id;
-    return jsonb_build_object('ok', true, 'action', 'check_out',
-      'message', 'Checked out at ' || to_char(v_local, 'HH12:MI AM'));
   end if;
   return jsonb_build_object('ok', false, 'message', 'You have already checked out for today.');
 end $$;
@@ -166,7 +181,6 @@ begin
     update public.payroll_runs set deduction_method = s.deduction_method, salary_divisor = s.salary_divisor,
       overtime_enabled = s.overtime_enabled, overtime_rate = s.overtime_rate, late_marks_per_half_day = s.late_marks_per_half_day,
       generated_by = auth.uid(), generated_at = now() where id = v_run;
-    delete from public.payroll_items where run_id = v_run;
   end if;
 
   for e in
@@ -261,7 +275,14 @@ begin
     insert into public.payroll_items (run_id, gym_id, employee_id, monthly_salary, divisor, present_days, late_count, absent_units,
       unpaid_leave_days, paid_leave_days, deduction_amount, overtime_hours, overtime_amount, incentive_amount, advance_recovery, net_salary, flags)
     values (v_run, p_gym, e.id, v_sal_end, v_div, v_present, v_late, v_abs, v_unpaid, v_paid, v_ded, round(v_ot_h, 2), v_ot_amt, v_inc, v_rec, v_net,
-      jsonb_build_object('unmarked_days', v_unmarked, 'missing_checkouts', v_missing, 'no_salary', v_sal_end = 0));
+      jsonb_build_object('unmarked_days', v_unmarked, 'missing_checkouts', v_missing, 'no_salary', v_sal_end = 0))
+    on conflict (run_id, employee_id) do update set
+      gym_id = excluded.gym_id, monthly_salary = excluded.monthly_salary, divisor = excluded.divisor,
+      present_days = excluded.present_days, late_count = excluded.late_count, absent_units = excluded.absent_units,
+      unpaid_leave_days = excluded.unpaid_leave_days, paid_leave_days = excluded.paid_leave_days,
+      deduction_amount = excluded.deduction_amount, overtime_hours = excluded.overtime_hours,
+      overtime_amount = excluded.overtime_amount, incentive_amount = excluded.incentive_amount,
+      advance_recovery = excluded.advance_recovery, net_salary = excluded.net_salary, flags = excluded.flags;
   end loop;
   return v_run;
 end $$;
@@ -322,6 +343,10 @@ begin
     update public.payroll_runs set status = 'paid' where id = r.id;
   end if;
 end $$;
+
+create policy items_delete_draft on public.payroll_items for delete to authenticated
+  using (private.manages_gym(gym_id) and private.has_perm('can_approve_payroll')
+    and exists (select 1 from public.payroll_runs r where r.id = run_id and r.status = 'draft'));
 
 -- only signed-in users may call these; each function checks the caller's role itself
 revoke all on function public.rotate_gym_qr(uuid), public.qr_check_in(text, text),

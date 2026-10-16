@@ -9,7 +9,8 @@ export async function signIn(formData: FormData) {
     password: String(formData.get("password") ?? ""),
   });
   if (error) redirect("/login?error=" + encodeURIComponent("Wrong email or password"));
-  redirect("/dashboard");
+  const next = String(formData.get("next") ?? "");
+  redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard");
 }
 
 export async function signOut() {

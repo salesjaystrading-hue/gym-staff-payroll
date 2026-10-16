@@ -28,6 +28,7 @@ export default async function GymsPage() {
                 <td className="td">{g.is_active ? "Active" : "Inactive"}</td>
                 <td className="td">
                   <div className="flex justify-end gap-2">
+                    <Link href={`/gyms/${g.id}/shifts`} className="btn-ghost">Shifts</Link>
                     {(admin || perms.can_configure_salary) && <Link href={`/gyms/${g.id}/settings`} className="btn-ghost">Salary rules</Link>}
                     {admin && <Link href={`/gyms/${g.id}/edit`} className="btn-ghost">Edit</Link>}
                     {admin && (

@@ -13,6 +13,7 @@ export async function saveEmployee(formData: FormData) {
     full_name: str(formData, "full_name"),
     phone: optStr(formData, "phone"),
     designation: optStr(formData, "designation"),
+    shift_id: optStr(formData, "shift_id"),
     gym_id: str(formData, "gym_id"),
     joining_date: str(formData, "joining_date"),
     weekly_off: Number(str(formData, "weekly_off") || 0),
@@ -65,4 +66,11 @@ export async function setEmployeeActive(formData: FormData) {
   const { supabase } = await getSession();
   await supabase.from("employees").update({ is_active: str(formData, "active") === "true" }).eq("id", str(formData, "id"));
   revalidatePath("/employees");
+}
+
+export async function resetDevice(formData: FormData) {
+  const { supabase } = await getSession();
+  const id = str(formData, "id");
+  await supabase.from("employees").update({ device_id: null }).eq("id", id);
+  redirect(`/employees/${id}/edit`);
 }

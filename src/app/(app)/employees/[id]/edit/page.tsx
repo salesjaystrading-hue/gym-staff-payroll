@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { requireRole } from "@/lib/session";
 import { EmployeeForm } from "@/components/EmployeeForm";
+import { resetDevice } from "../../actions";
 
 export default async function EditEmployee({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ error?: string }> }) {
   const { supabase, perms } = await requireRole(["admin", "gym_manager"]);
@@ -19,10 +20,18 @@ export default async function EditEmployee({ params, searchParams }: { params: P
   }
   const { data: history } = await supabase.from("employee_gym_history").select("id, from_date, to_date, gyms(name)")
     .eq("employee_id", id).order("from_date", { ascending: false });
+  const { data: shifts } = await supabase.from("shifts").select("id, name, gym_id").eq("is_active", true).order("name");
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-semibold">Edit {emp.full_name}</h1>
-      <EmployeeForm emp={emp} gyms={gyms ?? []} canSetSalary={perms.can_configure_salary} currentSalary={current} error={error} />
+      <EmployeeForm emp={emp} gyms={gyms ?? []} shifts={shifts ?? []} canSetSalary={perms.can_configure_salary} currentSalary={current} error={error} />
+      {emp.user_id && (
+        <form action={resetDevice} className="card flex max-w-xl items-center justify-between gap-3">
+          <input type="hidden" name="id" value={emp.id} />
+          <p className="text-sm">{emp.device_id ? "A phone is registered for QR check-in." : "No phone registered yet. The first check-in registers it."}</p>
+          {emp.device_id && <button className="btn-ghost">Reset phone</button>}
+        </form>
+      )}
       {!!history?.length && (
         <div className="card max-w-xl">
           <h2 className="mb-2 text-sm font-medium">Gym history</h2>
