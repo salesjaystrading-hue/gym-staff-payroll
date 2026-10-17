@@ -47,6 +47,8 @@ td{padding:8px 12px;border-top:1px solid var(--bd);vertical-align:top}
 .center{text-align:center}.big{font-size:42px}
 .reg td,.reg th{padding:6px 3px;text-align:center;font-size:12px}.reg td:first-child,.reg th:first-child{text-align:left;padding-left:12px;white-space:nowrap}
 details summary{cursor:pointer;color:var(--pri);font-size:12px;text-decoration:underline}
+@media print{header.top,nav#nav,.btn,.actions,form.inline,#toast{display:none!important}.card{border:0}body{background:#fff;color:#000}}
+.bar{height:8px;border-radius:4px;background:var(--pri)}.badge{display:inline-block;padding:1px 8px;border-radius:99px;background:var(--hov);font-size:11px}
 @media(max-width:760px){
  .layout{flex-direction:column;gap:8px}
  nav#nav{width:auto;flex-direction:row;overflow-x:auto;padding-bottom:6px}
@@ -133,6 +135,7 @@ function menu() {
   const m = [["/dashboard", "Dashboard"], ["/gyms", r === "admin" ? "Gyms" : "My gyms"], ["/employees", "Employees"], ["/attendance", "Attendance"], ["/leave", "Leave"]];
   if (p.can_approve_payroll || p.can_view_salaries) m.push(["/payroll", "Payroll"]);
   if (p.can_configure_salary || p.can_approve_payroll) m.push(["/advances", "Advances & bonus"]);
+  m.push(["/reports", "Reports"]);
   if (r === "admin") m.push(["/users", "Users & permissions"]);
   return m;
 }
@@ -228,33 +231,81 @@ const table = (head, rows, empty = "Nothing here yet.") =>
   `<div class="card flush"><table><thead><tr>${head.map((h) => `<th${h.startsWith(">") ? ' class="right"' : ""}>${esc(h.replace(/^>/, ""))}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.join("") : `<tr><td colspan="${head.length}" class="mut">${esc(empty)}</td></tr>`}</tbody></table></div>`;
 
 /* ================= dashboard ================= */
+const PRESENT = ["present", "late", "half_day"];
+const fmtDur = (ms) => `${Math.floor(ms / 36e5)}h ${String(Math.round((ms % 36e5) / 6e4)).padStart(2, "0")}m`;
+const payStatus = (i) => (Number(i.paid_amount) >= Number(i.final_net) - 0.005 ? "Paid" : Number(i.paid_amount) > 0 ? "Partially paid" : "Unpaid");
+const bars = (items) => {
+  const max = Math.max(1, ...items.map((i) => i.value)), w = 44;
+  return `<svg viewBox="0 0 ${items.length * w} 120" style="width:100%;max-width:460px;height:auto" role="img" aria-label="Chart">${items.map((it, i) => {
+    const hh = Math.round((it.value / max) * 78);
+    return `<rect x="${i * w + 6}" y="${96 - hh}" width="32" height="${hh}" rx="4" fill="var(--pri)"/><text x="${i * w + 22}" y="${90 - hh}" text-anchor="middle" font-size="10" fill="currentColor">${it.value}</text><text x="${i * w + 22}" y="112" text-anchor="middle" font-size="10" fill="var(--mut)">${esc(it.label)}</text>`;
+  }).join("")}</svg>`;
+};
+const statCard = (n, t, href, cls = "") => `<a class="card" style="text-decoration:none;color:inherit;margin:0" href="#${href}"><div class="num ${cls}">${n}</div><div class="small mut">${t}</div></a>`;
+
 R(/^\/dashboard$/, async () => {
+  const today = todayIST(), m = monthIST();
   if (isStaff()) {
     const e = await myEmployee();
     if (!e) return `<h1>Hello, ${esc(S.profile.full_name)}</h1><div class="card">Your login is not linked to an employee record yet. Ask your manager.</div>`;
-    const today = todayIST();
-    const a = await q(sb.from("attendance").select("*").eq("employee_id", e.id).eq("work_date", today).maybeSingle());
-    const m = monthIST();
-    const rows = await q(sb.from("attendance").select("status").eq("employee_id", e.id).gte("work_date", m + "-01").lte("work_date", m + "-" + dim(m)));
+    const [a, rows, set, items] = await Promise.all([
+      q(sb.from("attendance").select("*").eq("employee_id", e.id).eq("work_date", today).maybeSingle()),
+      q(sb.from("attendance").select("status").eq("employee_id", e.id).gte("work_date", m + "-01").lte("work_date", m + "-" + dim(m))),
+      sb.from("gym_settings").select("paid_leaves_per_month").eq("gym_id", e.gym_id).maybeSingle(),
+      sb.from("payroll_item_view").select("*").eq("employee_id", e.id).order("month", { ascending: false }).limit(1),
+    ]);
     const c = {}; rows.forEach((r) => (c[r.status] = (c[r.status] || 0) + 1));
-    return `<h1>Hello, ${esc(S.profile.full_name)}</h1>
-    <div class="card"><h2>Today</h2>${a ? `<p class="cap"><b>${label(a.status)}</b> · in ${timeIST(a.check_in)} · out ${timeIST(a.check_out)}</p>` : `<p class="mut">Not marked yet. Scan the QR code shown at your gym with your phone camera.</p>`}</div>
+    const days = (c.present || 0) + (c.late || 0) + (c.half_day || 0) * 0.5;
+    const bal = set.data ? Math.max(0, Number(set.data.paid_leaves_per_month) - (c.paid_leave || 0)) : "–";
+    const last = items.data?.[0];
+    const hours = a?.check_in ? (a.check_out ? fmtDur(new Date(a.check_out) - new Date(a.check_in)) : "In progress") : "–";
+    return `<h1>Welcome back, ${esc(S.profile.full_name.split(" ")[0])}</h1>
+    <div class="grid g2">
+      <div class="card"><h2>Today</h2>${a ? `<p class="cap" style="font-size:18px;margin:0"><b>${label(a.status)}</b></p><p class="mut small">In ${timeIST(a.check_in)} · Out ${timeIST(a.check_out)} · Working hours ${hours}</p>` : `<p class="mut">Not marked yet. Scan the QR code shown at your gym with your phone camera.</p>`}</div>
+      <div class="card"><h2>Salary</h2>${last && last.run_status !== "draft" ? `<p style="margin:0;font-size:18px"><b>${inr(last.final_net)}</b> <span class="badge">${payStatus(last)}</span></p><p class="small mut">${monthLabel(last.month)}</p>` : `<p class="mut">No approved salary yet.</p>`}</div>
+    </div>
     <div class="card"><h2>${monthLabel(m + "-01")}</h2><div class="grid g3">
-      ${[["present", "Present"], ["late", "Late"], ["half_day", "Half days"], ["absent", "Absent"], ["paid_leave", "Paid leave"], ["unpaid_leave", "Unpaid leave"]].map(([k, t]) => `<div><div class="num">${c[k] || 0}</div><div class="small mut">${t}</div></div>`).join("")}
-    </div></div>`;
+      <div><div class="num">${days}</div><div class="small mut">Days present</div></div>
+      <div><div class="num">${c.late || 0}</div><div class="small mut">Late</div></div>
+      <div><div class="num">${c.absent || 0}</div><div class="small mut">Absent</div></div>
+      <div><div class="num">${(c.paid_leave || 0) + (c.unpaid_leave || 0)}</div><div class="small mut">Leave taken</div></div>
+      <div><div class="num">${c.half_day || 0}</div><div class="small mut">Half days</div></div>
+      <div><div class="num">${bal}</div><div class="small mut">Paid leave left</div></div></div></div>
+    <div class="card"><h2>Quick actions</h2><div class="actions" style="justify-content:flex-start">
+      <a class="btn" href="#/leave">Request leave</a><a class="btn ghost" href="#/attendance">Attendance &amp; corrections</a><a class="btn ghost" href="#/salary">Salary slips &amp; advance</a></div></div>`;
   }
-  const today = todayIST(), m = monthIST() + "-01";
-  const [gyms, emps, present, pend, drafts] = await Promise.all([
-    count(sb.from("gyms").select("id", { count: "exact", head: true }).eq("is_active", true)),
-    count(sb.from("employees").select("id", { count: "exact", head: true }).eq("is_active", true)),
-    count(sb.from("attendance").select("id", { count: "exact", head: true }).eq("work_date", today).in("status", ["present", "late", "half_day"])),
+  const d7 = new Date(Date.now() + IST - 6 * 864e5).toISOString().slice(0, 10);
+  const money = S.perms.can_approve_payroll || S.perms.can_view_salaries;
+  const [gyms, emps, att7, act, pendL, pendC, pendA, drafts] = await Promise.all([
+    gymsList(),
+    q(sb.from("employees").select("id,gym_id").eq("is_active", true)),
+    q(sb.from("attendance").select("employee_id,work_date,status").gte("work_date", d7).lte("work_date", today)),
+    q(sb.from("attendance").select("employee_id,status,check_in,check_out,updated_at,employees(full_name),gyms(name)").order("updated_at", { ascending: false }).limit(8)),
     count(sb.from("leave_requests").select("id", { count: "exact", head: true }).eq("status", "pending")),
-    S.perms.can_approve_payroll || S.perms.can_view_salaries ? count(sb.from("payroll_runs").select("id", { count: "exact", head: true }).eq("status", "draft")) : Promise.resolve(null),
+    count(sb.from("attendance_corrections").select("id", { count: "exact", head: true }).eq("status", "pending")),
+    count(sb.from("advance_requests").select("id", { count: "exact", head: true }).eq("status", "pending")),
+    money ? count(sb.from("payroll_runs").select("id", { count: "exact", head: true }).eq("status", "draft")) : Promise.resolve(null),
   ]);
-  const card = (n, t, href) => `<a class="card" style="text-decoration:none;color:inherit;margin:0" href="#${href}"><div class="num">${n}</div><div class="small mut">${t}</div></a>`;
+  const tod = att7.filter((a) => a.work_date === today);
+  const present = tod.filter((a) => PRESENT.includes(a.status)).length, late = tod.filter((a) => a.status === "late").length;
+  const onLeave = tod.filter((a) => a.status === "paid_leave" || a.status === "unpaid_leave").length;
+  const off = tod.filter((a) => a.status === "weekly_off" || a.status === "holiday").length;
+  const notIn = Math.max(0, emps.length - tod.length);
+  const week = Array.from({ length: 7 }, (_, i) => { const d = new Date(Date.now() + IST - (6 - i) * 864e5).toISOString().slice(0, 10); return { label: new Date(d + "T00:00:00Z").toLocaleDateString("en-IN", { timeZone: "UTC", weekday: "short" }), value: att7.filter((a) => a.work_date === d && PRESENT.includes(a.status)).length }; });
+  const per = gyms.map((g) => ({ name: g.name, n: emps.filter((e) => e.gym_id === g.id).length })).filter((x) => x.n);
+  const maxN = Math.max(1, ...per.map((x) => x.n));
+  const pend = pendC + pendA;
   return `<h1>Dashboard</h1><div class="grid g3">
-    ${card(gyms, "Active gyms", "/gyms")}${card(emps, "Active employees", "/employees")}${card(present, "Present today", "/attendance")}
-    ${card(pend, "Leave requests waiting", "/leave")}${drafts == null ? "" : card(drafts, "Payroll drafts", "/payroll")}</div>`;
+    ${statCard(gyms.filter((g) => g.is_active).length, "Active gyms", "/gyms")}${statCard(emps.length, "Active employees", "/employees")}
+    ${statCard(present, "Present today", "/attendance", "ok")}${statCard(late, "Late today", "/attendance", late ? "warn" : "")}
+    ${statCard(onLeave, "On leave today", "/leave")}${statCard(notIn, "Not checked in yet", "/attendance", notIn ? "warn" : "")}
+    ${statCard(pendL, "Leave requests waiting", "/leave", pendL ? "warn" : "")}${statCard(pend, "Corrections &amp; advances waiting", "/attendance", pend ? "warn" : "")}
+    ${drafts == null ? "" : statCard(drafts, "Payroll drafts", "/payroll")}</div>
+  <div class="grid g2" style="margin-top:12px">
+    <div class="card"><h2>Present – last 7 days</h2>${bars(week)}</div>
+    <div class="card"><h2>Employees by gym</h2>${per.map((x) => `<div style="margin-bottom:8px"><div class="small row" style="margin:0 0 2px"><span>${esc(x.name)}</span><b>${x.n}</b></div><div class="bar" style="width:${Math.round((x.n / maxN) * 100)}%"></div></div>`).join("") || '<p class="mut">No employees yet.</p>'}</div>
+  </div>
+  <div class="card"><h2>Today's activity</h2>${act.length ? `<table><tbody>${act.map((a) => `<tr><td>${esc(a.employees?.full_name || "")}<div class="small mut">${esc(a.gyms?.name || "")}</div></td><td class="cap">${label(a.status)}</td><td class="small">In ${timeIST(a.check_in)}<br>Out ${timeIST(a.check_out)}</td></tr>`).join("")}</tbody></table>` : '<p class="mut">No activity yet.</p>'}</div>`;
 });
 
 /* ================= gyms ================= */
@@ -286,7 +337,24 @@ R(/^\/gyms\/([0-9a-f-]{36})$/, async ([id]) => {
     q(sb.from("gym_holidays").select("*").eq("gym_id", id).gte("holiday_date", todayIST().slice(0, 4) + "-01-01").order("holiday_date")),
   ]);
   const canSal = isAdmin() || S.perms.can_configure_salary, canGym = isAdmin();
+  const today = todayIST();
+  const [ge, gat, gitems] = await Promise.all([
+    q(sb.from("employees").select("id").eq("gym_id", id).eq("is_active", true)),
+    q(sb.from("attendance").select("status").eq("gym_id", id).eq("work_date", today)),
+    canPay() ? sb.from("payroll_item_view").select("month,final_net,paid_amount,run_status").eq("gym_id", id) : Promise.resolve({ data: null }),
+  ]);
+  const gp = gat.filter((a) => PRESENT.includes(a.status)).length, gl = gat.filter((a) => a.status.endsWith("leave")).length;
+  const gm = gitems.data ? gitems.data.filter((x) => x.month === monthIST() + "-01").reduce((a, x) => a + Number(x.final_net), 0) : null;
+  const gpend = gitems.data ? gitems.data.filter((x) => x.run_status !== "draft").reduce((a, x) => a + Math.max(0, Number(x.final_net) - Number(x.paid_amount)), 0) : null;
+  const gdash = `<div class="grid g3" style="margin-bottom:12px">
+    <div class="card" style="margin:0"><div class="num">${ge.length}</div><div class="small mut">Employees</div></div>
+    <div class="card" style="margin:0"><div class="num ok">${gp}</div><div class="small mut">Present today</div></div>
+    <div class="card" style="margin:0"><div class="num">${gl}</div><div class="small mut">On leave</div></div>
+    <div class="card" style="margin:0"><div class="num ${ge.length - gat.length ? "warn" : ""}">${Math.max(0, ge.length - gat.length)}</div><div class="small mut">Not marked yet</div></div>
+    ${gm == null ? "" : `<div class="card" style="margin:0"><div class="num">${inr(gm)}</div><div class="small mut">Salary this month</div></div><div class="card" style="margin:0"><div class="num ${gpend ? "warn" : ""}">${inr(gpend)}</div><div class="small mut">Pending payments</div></div>`}</div>
+  <div class="actions" style="justify-content:flex-start;margin-bottom:16px"><a class="btn ghost" href="#/employees/new">Add employee</a><a class="btn ghost" href="#/attendance?gym=${id}">View attendance</a>${canPay() ? `<a class="btn ghost" href="#/payroll">Generate payroll</a>` : ""}<a class="btn ghost" href="#" data-click="goShifts">Manage shifts</a></div>`;
   return `<div class="row"><h1>${esc(g.name)}</h1><a class="btn ghost" href="#/attendance/qr?gym=${id}">Show QR code</a></div>
+  ${gdash}
   ${canGym ? `<h2>Details</h2><form class="form card" data-submit="gymUpdate" data-id="${id}">${gymForm(g)}
     <div class="full"><label><input type="checkbox" name="is_active" ${g.is_active ? "checked" : ""}> Active</label></div>
     <div class="full"><button class="btn">Save details</button></div></form>` : ""}
@@ -301,7 +369,7 @@ R(/^\/gyms\/([0-9a-f-]{36})$/, async ([id]) => {
     ${field("Overtime rate (₹ per hour)", inp("overtime_rate", { type: "number", min: 0, step: "0.01", value: st.overtime_rate }))}
     <div class="full"><button class="btn">Save rules</button></div></form>`
     : `<div class="card small">Method: <b>${esc(st.deduction_method)}</b> · divisor ${esc(label(st.salary_divisor))} · overtime ${st.overtime_enabled ? "on" : "off"}</div>`}
-  <h2>Shifts</h2>
+  <h2 id="shifts">Shifts</h2>
   ${table(["Name", "Start", "End", "Status", ""], shifts.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.start_time.slice(0, 5)}</td><td>${x.end_time.slice(0, 5)}${x.end_time < x.start_time ? ' <span class="small mut">(next day)</span>' : ""}</td><td>${x.is_active ? "Active" : "Inactive"}</td>
     <td class="right">${isAdmin() || S.perms.can_manage_employees ? `<a href="#" data-click="shiftToggle" data-id="${x.id}" data-on="${x.is_active ? 0 : 1}" data-gym="${id}">${x.is_active ? "Deactivate" : "Activate"}</a>` : ""}</td></tr>`), "No shifts yet.")}
   ${isAdmin() || S.perms.can_manage_employees ? `<form class="inline card" data-submit="shiftAdd" data-gym="${id}">
@@ -312,6 +380,7 @@ R(/^\/gyms\/([0-9a-f-]{36})$/, async ([id]) => {
   ${isAdmin() || S.perms.can_manage_employees ? `<form class="inline card" data-submit="holAdd" data-gym="${id}">
     ${field("Date", inp("holiday_date", { type: "date", required: true }))}${field("Name", inp("name", { required: true, placeholder: "Diwali" }))}<button class="btn">Add holiday</button></form>` : ""}`;
 });
+H.goShifts = () => { const el = document.getElementById("shifts"); if (el) el.scrollIntoView({ behavior: "smooth" }); };
 H.gymUpdate = async (fd, f) => { await mut(sb.from("gyms").update({ ...gymRow(fd), is_active: fd.get("is_active") === "on", updated_at: new Date().toISOString() }).eq("id", f.dataset.id).select("id")); toast("Saved"); };
 H.settingsUpdate = async (fd, f) => {
   const n = (k) => Number(s(fd, k) || 0);
@@ -381,6 +450,13 @@ R(/^\/employees\/([0-9a-f-]{36})$/, async ([id]) => {
   let sals = null;
   if (isAdmin() || S.perms.can_view_salaries || canSal) { const r = await sb.from("employee_salaries").select("*").eq("employee_id", id).order("effective_from", { ascending: false }); sals = r.data || []; }
   const hist = await q(sb.from("employee_gym_history").select("*,gyms(name)").eq("employee_id", id).order("from_date", { ascending: false }));
+  const [tl, tc] = await Promise.all([sb.from("leave_requests").select("from_date,to_date,status,approved_type,created_at").eq("employee_id", id).neq("status", "pending"), sb.from("attendance_corrections").select("work_date,status,reason,created_at").eq("employee_id", id).neq("status", "pending")]);
+  const events = [
+    ...(sals || []).map((x) => [x.effective_from, "Salary set to " + inr(x.monthly_salary)]),
+    ...hist.map((x) => [x.from_date, "Joined gym: " + (x.gyms?.name || "")]),
+    ...(tl.data || []).map((x) => [(x.created_at || x.from_date).slice(0, 10), `Leave ${x.status}${x.approved_type ? " (" + x.approved_type + ")" : ""}: ${x.from_date} → ${x.to_date}`]),
+    ...(tc.data || []).map((x) => [(x.created_at || x.work_date).slice(0, 10), `Attendance correction ${x.status} for ${x.work_date}`]),
+  ].sort((a, b) => b[0].localeCompare(a[0]));
   return `<div class="row"><h1>${esc(e.full_name)}</h1><span class="mut small">${esc(e.employee_code)}</span></div>
   ${canEdit ? `<form class="form card" data-submit="empUpdate" data-id="${id}">${await employeeForm(e)}
     <div class="full"><label><input type="checkbox" name="is_active" ${e.is_active ? "checked" : ""}> Active</label></div>
@@ -390,6 +466,7 @@ R(/^\/employees\/([0-9a-f-]{36})$/, async ([id]) => {
     ${e.device_id && (isAdmin() || S.perms.can_edit_attendance) ? `<button class="btn ghost" data-click="resetPhone" data-id="${id}">Reset phone</button>` : ""}</div>
   ${sals ? `<h2>Salary</h2>${table(["Effective from", ">Monthly salary"], sals.map((x) => `<tr><td>${x.effective_from}</td><td class="right">${inr(x.monthly_salary)}</td></tr>`), "No salary set.")}
     ${canSal ? `<form class="inline card" data-submit="salaryAdd" data-id="${id}">${field("New salary (₹)", inp("monthly_salary", { type: "number", min: 0, step: "0.01", required: true }))}${field("Effective from", inp("effective_from", { type: "date", required: true, value: todayIST() }))}<button class="btn">Add revision</button></form>` : ""}` : ""}
+  <h2>Timeline</h2>${table(["Date", "Event"], events.map((x) => `<tr><td>${x[0]}</td><td>${esc(x[1])}</td></tr>`), "Nothing yet.")}
   <h2>Gym history</h2>${table(["Gym", "From", "To"], hist.map((x) => `<tr><td>${esc(x.gyms?.name || "")}</td><td>${x.from_date}</td><td>${x.to_date || "now"}</td></tr>`))}`;
 });
 H.empUpdate = async (fd, f) => {
@@ -406,21 +483,32 @@ R(/^\/attendance$/, async (_, qr) => {
   const gyms = await gymsList(); const gid = qr.gym || gyms[0]?.id;
   if (!gid) return `<div class="card">No gyms yet.</div>`;
   const date = qr.date || todayIST();
-  const [emps, atts] = await Promise.all([
+  const [emps, atts, corr] = await Promise.all([
     q(sb.from("employees").select("id,full_name,employee_code").eq("gym_id", gid).eq("is_active", true).order("full_name")),
     q(sb.from("attendance").select("*").eq("gym_id", gid).eq("work_date", date)),
+    q(sb.from("attendance_corrections").select("*,employees(full_name)").eq("gym_id", gid).eq("status", "pending").order("created_at")),
   ]);
   const by = Object.fromEntries(atts.map((a) => [a.employee_id, a]));
   const canEdit = isAdmin() || S.perms.can_edit_attendance;
+  const today = todayIST();
+  const counts = { present: 0, absent: 0, leave: 0, none: 0 };
+  emps.forEach((e) => { const a = by[e.id]; if (!a) counts.none++; else if (PRESENT.includes(a.status)) counts.present++; else if (a.status === "absent") counts.absent++; else counts.leave++; });
   return `<div class="row"><h1>Attendance</h1><div class="actions"><a class="btn ghost" href="#/attendance/register?gym=${gid}">Monthly register</a><a class="btn ghost" href="#/attendance/qr?gym=${gid}">Show QR</a></div></div>
   <form class="inline" data-submit="filter" data-path="/attendance">
     ${field("Gym", sel("gym", gyms.map((g) => [g.id, g.name]), gid, 'onchange="this.form.requestSubmit()"'))}
     ${field("Date", inp("date", { type: "date", value: date, onchange: "this.form.requestSubmit()" }))}</form>
-  <div style="height:12px"></div>` +
+  <div class="grid g3" style="margin:12px 0"><div class="card" style="margin:0"><div class="num ok">${counts.present}</div><div class="small mut">Present</div></div><div class="card" style="margin:0"><div class="num">${counts.absent + counts.leave}</div><div class="small mut">Absent / leave</div></div><div class="card" style="margin:0"><div class="num ${counts.none ? "warn" : ""}">${counts.none}</div><div class="small mut">Not marked</div></div></div>
+  ${corr.length ? `<h2>Correction requests (${corr.length})</h2>${corr.map((c) => `<div class="card"><div class="row" style="margin:0 0 6px"><b>${esc(c.employees?.full_name || "")}</b><span class="small">${c.work_date}</span></div>
+    <div class="small">In ${timeIST(c.check_in)} · Out ${timeIST(c.check_out)}</div><div class="small mut">${esc(c.reason)}</div>
+    ${canEdit ? `<form class="inline" style="margin-top:8px" data-submit="corrDecide" data-id="${c.id}">${inp("note", { placeholder: "Note (optional)" })}<button class="btn" name="d" value="approve">Approve</button><button class="btn ghost" name="d" value="reject">Reject</button></form>` : ""}</div>`).join("")}` : ""}
+  <div style="height:8px"></div>` +
     (emps.length ? emps.map((e) => {
       const a = by[e.id];
+      const missing = a && a.check_in && !a.check_out && date < today;
+      const hrs = a?.check_in && a?.check_out ? fmtDur(new Date(a.check_out) - new Date(a.check_in)) : "";
       return `<div class="card"><div class="row" style="margin:0 0 8px"><b>${esc(e.full_name)} <span class="small mut">${esc(e.employee_code)}</span></b>
-        <span class="small">${a ? `<b class="cap">${label(a.status)}</b> · in ${timeIST(a.check_in)} · out ${timeIST(a.check_out)} · ${a.source}` : '<span class="warn">Not marked</span>'}</span></div>
+        <span class="small">${a ? `<b class="cap">${label(a.status)}</b> · in ${timeIST(a.check_in)} · out ${timeIST(a.check_out)}${hrs ? " · " + hrs : ""} · ${a.source}` : '<span class="warn">Not marked</span>'}</span></div>
+        ${missing ? `<div class="small warn" style="margin-bottom:6px">⚠ Missing check-out</div>` : ""}
         ${a?.note ? `<div class="small mut" style="margin-bottom:8px">Note: ${esc(a.note)}</div>` : ""}
         ${canEdit ? `<form class="inline" data-submit="markAtt" data-emp="${e.id}" data-gym="${gid}" data-date="${date}">
           ${field("Status", sel("status", STATUS.map((x) => [x, label(x)]), a?.status || "present"))}
@@ -429,6 +517,7 @@ R(/^\/attendance$/, async (_, qr) => {
           <button class="btn">Save</button></form>` : ""}</div>`;
     }).join("") : `<div class="card mut">No active employees in this gym.</div>`);
 });
+H.corrDecide = async (fd, f, btn) => { await q(sb.rpc("decide_correction", { p_id: f.dataset.id, p_approve: btn?.value === "approve", p_note: v(fd, "note") })); toast("Done"); route(); };
 H.markAtt = async (fd, f) => {
   const d = f.dataset, inT = s(fd, "in"), outT = s(fd, "out");
   let cin = istStamp(d.date, inT), cout = istStamp(d.date, outT);
@@ -440,25 +529,44 @@ H.markAtt = async (fd, f) => {
 async function staffAttendance(qr) {
   const e = await myEmployee(); if (!e) return `<div class="card">Your login is not linked to an employee record yet.</div>`;
   const m = qr.month || monthIST();
-  const rows = await q(sb.from("attendance").select("*").eq("employee_id", e.id).gte("work_date", m + "-01").lte("work_date", m + "-" + dim(m)).order("work_date", { ascending: false }));
+  const [rows, corr] = await Promise.all([
+    q(sb.from("attendance").select("*").eq("employee_id", e.id).gte("work_date", m + "-01").lte("work_date", m + "-" + dim(m)).order("work_date", { ascending: false })),
+    q(sb.from("attendance_corrections").select("*").eq("employee_id", e.id).order("created_at", { ascending: false }).limit(10)),
+  ]);
+  const today = todayIST();
   return `<h1>My attendance</h1><form class="inline" data-submit="filter" data-path="/attendance">${field("Month", monthInput("month", m))}</form><div style="height:12px"></div>` +
-    table(["Date", "Status", "In", "Out"], rows.map((a) => `<tr><td>${a.work_date}</td><td class="cap">${label(a.status)}</td><td>${timeIST(a.check_in)}</td><td>${timeIST(a.check_out)}</td></tr>`), "No records this month.");
+    table(["Date", "Status", "In", "Out", "Hours"], rows.map((a) => `<tr><td>${a.work_date}</td><td class="cap">${label(a.status)}${a.check_in && !a.check_out && a.work_date < today ? ' <span class="warn small">missing check-out</span>' : ""}</td><td>${timeIST(a.check_in)}</td><td>${timeIST(a.check_out)}</td><td>${a.check_in && a.check_out ? fmtDur(new Date(a.check_out) - new Date(a.check_in)) : "–"}</td></tr>`), "No records this month.") +
+    `<h2>Request a correction</h2><p class="small mut">Forgot to check in or out? Tell your manager what the times should be.</p>
+    <form class="form card" data-submit="corrRequest" data-emp="${e.id}" data-gym="${e.gym_id}">
+      ${field("Date", inp("work_date", { type: "date", required: true, max: today, value: today }))}<div></div>
+      ${field("Check-in time", inp("in", { type: "time" }))}${field("Check-out time", inp("out", { type: "time" }))}
+      ${field("Reason", inp("reason", { required: true, placeholder: "e.g. forgot to scan when leaving" }), "full")}
+      <div class="full"><button class="btn">Send request</button></div></form>` +
+    (corr.length ? table(["Date", "Times", "Status"], corr.map((c) => `<tr><td>${c.work_date}</td><td class="small">In ${timeIST(c.check_in)} · Out ${timeIST(c.check_out)}<div class="mut">${esc(c.reason)}</div></td><td class="cap">${c.status}${c.decision_note ? `<div class="small mut">${esc(c.decision_note)}</div>` : ""}</td></tr>`)) : "");
 }
+H.corrRequest = async (fd, f) => {
+  const d = f.dataset, date = s(fd, "work_date");
+  let cin = istStamp(date, s(fd, "in")), cout = istStamp(date, s(fd, "out"));
+  if (!cin && !cout) throw new Error("Enter a check-in or check-out time");
+  if (cin && cout && cout <= cin) cout = new Date(new Date(cout).getTime() + 864e5).toISOString();
+  await q(sb.from("attendance_corrections").insert({ employee_id: d.emp, gym_id: d.gym, work_date: date, check_in: cin, check_out: cout, reason: s(fd, "reason") }));
+  toast("Request sent"); route();
+};
 
 R(/^\/attendance\/register$/, async (_, qr) => {
   if (isStaff()) return go("/attendance");
   const gyms = await gymsList(); const gid = qr.gym || gyms[0]?.id; const m = qr.month || monthIST(); const n = dim(m);
   const [emps, atts] = await Promise.all([
     q(sb.from("employees").select("id,full_name").eq("gym_id", gid).eq("is_active", true).order("full_name")),
-    q(sb.from("attendance").select("employee_id,work_date,status").eq("gym_id", gid).gte("work_date", m + "-01").lte("work_date", m + "-" + n)),
+    q(sb.from("attendance").select("employee_id,work_date,status,check_in,check_out").eq("gym_id", gid).gte("work_date", m + "-01").lte("work_date", m + "-" + n)),
   ]);
-  const map = {}; atts.forEach((a) => (map[a.employee_id + a.work_date] = a.status));
+  const map = {}; atts.forEach((a) => (map[a.employee_id + a.work_date] = a.status + (a.check_in && !a.check_out && a.work_date < todayIST() ? "*" : "")));
   const days = Array.from({ length: n }, (_, i) => i + 1);
   return `<div class="row"><h1>Monthly register</h1><a class="btn ghost" href="#/attendance?gym=${gid}">Daily marking</a></div>
   <form class="inline" data-submit="filter" data-path="/attendance/register">${field("Gym", sel("gym", gyms.map((g) => [g.id, g.name]), gid, 'onchange="this.form.requestSubmit()"'))}${field("Month", monthInput("month", m))}</form>
-  <p class="small mut">P present · L late · H half day · A absent · PL paid leave · UL unpaid leave · W weekly off · HD holiday</p>
+  <p class="small mut">* missing check-out · P present · L late · H half day · A absent · PL paid leave · UL unpaid leave · W weekly off · HD holiday</p>
   <div class="card flush"><table class="reg"><thead><tr><th>Name</th>${days.map((d) => `<th>${d}</th>`).join("")}</tr></thead><tbody>
-  ${emps.map((e) => `<tr><td>${esc(e.full_name)}</td>${days.map((d) => { const st = map[e.id + m + "-" + String(d).padStart(2, "0")]; return `<td class="${st === "absent" || st === "unpaid_leave" ? "err" : ""}">${st ? CODE[st] : ""}</td>`; }).join("")}</tr>`).join("")}
+  ${emps.map((e) => `<tr><td>${esc(e.full_name)}</td>${days.map((d) => { const raw = map[e.id + m + "-" + String(d).padStart(2, "0")] || "", st = raw.replace("*", ""); return `<td class="${st === "absent" || st === "unpaid_leave" ? "err" : raw.endsWith("*") ? "warn" : ""}">${st ? CODE[st] + (raw.endsWith("*") ? "*" : "") : ""}</td>`; }).join("")}</tr>`).join("")}
   </tbody></table></div>`;
 });
 
@@ -568,7 +676,7 @@ R(/^\/payroll\/([0-9a-f-]{36})$/, async ([id]) => {
   ${warns.length && draft ? `<div class="card warn"><b>Check before approving:</b><ul style="margin:6px 0 0">${warns.map((i) => `<li>${esc(en[i.employee_id]?.full_name || "")}: ${[i.flags.unmarked_days ? i.flags.unmarked_days + " unmarked day(s) counted absent" : "", i.flags.missing_checkouts ? i.flags.missing_checkouts + " missing check-out(s)" : "", i.flags.no_salary ? "no salary set" : ""].filter(Boolean).join("; ")}</li>`).join("")}</ul></div>` : ""}
   ${draft && canAp ? `<div class="actions" style="margin-bottom:12px"><button class="btn ghost" data-click="payRecalc" data-id="${id}" data-gym="${run.gym_id}" data-month="${run.month}">Recalculate</button><button class="btn" data-click="payApprove" data-id="${id}">Approve &amp; lock</button></div>` : ""}
   <div class="card flush"><table><thead><tr><th>Name</th><th class="right">Salary</th><th class="right">Present</th><th class="right">Absent units</th><th class="right">Deduction</th><th class="right">OT</th><th class="right">Bonus</th><th class="right">Advance</th><th class="right">Adjust</th><th class="right">Net</th><th class="right">Paid</th><th></th></tr></thead><tbody>
-  ${items.map((i) => `<tr><td>${esc(en[i.employee_id]?.full_name || "")}</td><td class="right">${inr(i.monthly_salary)}</td><td class="right">${i.present_days}</td><td class="right">${i.absent_units}</td><td class="right">${inr(i.deduction_amount)}</td><td class="right">${inr(i.overtime_amount)}</td><td class="right">${inr(i.incentive_amount)}</td><td class="right">${inr(i.advance_recovery)}</td><td class="right">${inr(Number(i.adj_earning) - Number(i.adj_deduction))}</td><td class="right"><b>${inr(i.final_net)}</b></td><td class="right">${inr(i.paid_amount)}</td><td class="right"><a href="#" data-click="slip" data-id="${i.id}" data-run="${id}">Slip</a></td></tr>
+  ${items.map((i) => `<tr><td>${esc(en[i.employee_id]?.full_name || "")}</td><td class="right">${inr(i.monthly_salary)}</td><td class="right">${i.present_days}</td><td class="right">${i.absent_units}</td><td class="right">${inr(i.deduction_amount)}</td><td class="right">${inr(i.overtime_amount)}</td><td class="right">${inr(i.incentive_amount)}</td><td class="right">${inr(i.advance_recovery)}</td><td class="right">${inr(Number(i.adj_earning) - Number(i.adj_deduction))}</td><td class="right"><b>${inr(i.final_net)}</b></td><td class="right">${inr(i.paid_amount)}${draft ? "" : `<div class="small mut">${payStatus(i)}</div>`}</td><td class="right">${slipLinks(i.id)}</td></tr>
    ${!draft && canAp ? `<tr><td colspan="12"><details><summary>Pay / adjust ${esc(en[i.employee_id]?.full_name || "")}</summary>
      <form class="inline" style="margin:8px 0" data-submit="payRecord" data-item="${i.id}">${field("Amount", inp("amount", { type: "number", step: "0.01", min: 0.01, required: true, value: Math.max(0, Number(i.final_net) - Number(i.paid_amount)).toFixed(2) }))}${field("Date", inp("paid_on", { type: "date", required: true, value: todayIST() }))}${field("Method", sel("method", [["bank", "Bank"], ["upi", "UPI"], ["cash", "Cash"]], "bank"))}${field("Reference", inp("reference"))}<button class="btn">Record payment</button></form>
      <form class="inline" style="margin:8px 0" data-submit="adjAdd" data-run="${id}" data-gym="${run.gym_id}" data-emp="${i.employee_id}">${field("Type", sel("kind", [["earning", "Add to salary"], ["deduction", "Deduct"]], "earning"))}${field("Amount", inp("amount", { type: "number", step: "0.01", min: 0.01, required: true }))}${field("Reason", inp("reason", { required: true }))}<button class="btn ghost">Add adjustment</button></form>
@@ -586,65 +694,118 @@ H.payRecord = async (fd, f) => { await q(sb.rpc("record_payment", { p_item: f.da
 H.adjAdd = async (fd, f) => { const d = f.dataset; await q(sb.from("payroll_adjustments").insert({ run_id: d.run, gym_id: d.gym, employee_id: d.emp, kind: s(fd, "kind"), amount: Number(s(fd, "amount")), reason: s(fd, "reason"), created_by: S.user.id })); toast("Adjustment added"); route(); };
 
 /* ---- salary slip PDF ---- */
-async function makeSlip(item, run, emp, gymName) {
+async function makeSlip(item, run, emp, gym, share) {
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
-  const pdf = await PDFDocument.create(); const page = pdf.addPage([420, 560]);
+  const pdf = await PDFDocument.create(); const page = pdf.addPage([595, 842]);
   const f = await pdf.embedFont(StandardFonts.Helvetica), fb = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const green = rgb(0.016, 0.47, 0.34), grey = rgb(0.4, 0.4, 0.45), ink = rgb(0.1, 0.1, 0.12);
   const rs = (n) => "Rs. " + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  let y = 520;
-  const text = (t, x, size = 10, bold = false) => page.drawText(String(t), { x, y, size, font: bold ? fb : f, color: rgb(0.1, 0.1, 0.1) });
-  const line = (a, b, bold) => { text(a, 30, 10, bold); const w = (bold ? fb : f).widthOfTextAtSize(rs(b), 10); page.drawText(rs(b), { x: 390 - w, y, size: 10, font: bold ? fb : f }); y -= 18; };
-  text(gymName, 30, 16, true); y -= 20; text("Salary slip - " + monthLabel(run.month), 30, 11); y -= 26;
-  text(emp.full_name + (emp.employee_code ? "  (" + emp.employee_code + ")" : ""), 30, 11, true); y -= 16;
-  if (emp.designation) { text(emp.designation, 30, 9); y -= 16; }
-  y -= 6; page.drawLine({ start: { x: 30, y: y + 10 }, end: { x: 390, y: y + 10 }, thickness: 0.5 }); y -= 6;
-  text(`Present ${item.present_days} · Late ${item.late_count} · Absent units ${item.absent_units} · Paid leave ${item.paid_leave_days} · Unpaid leave ${item.unpaid_leave_days}`, 30, 8.5); y -= 24;
-  line("Monthly salary", item.monthly_salary); line("Deduction for absence / leave", -item.deduction_amount);
-  if (Number(item.overtime_amount)) line("Overtime (" + item.overtime_hours + " h)", item.overtime_amount);
-  if (Number(item.incentive_amount)) line("Bonus / incentive", item.incentive_amount);
-  if (Number(item.advance_recovery)) line("Advance recovery", -item.advance_recovery);
-  if (Number(item.adj_earning)) line("Adjustment (added)", item.adj_earning);
-  if (Number(item.adj_deduction)) line("Adjustment (deducted)", -item.adj_deduction);
-  y -= 4; page.drawLine({ start: { x: 30, y: y + 12 }, end: { x: 390, y: y + 12 }, thickness: 0.5 }); y -= 4;
-  line("Net salary", item.final_net, true); line("Paid so far", item.paid_amount);
-  y -= 30; text("Generated " + new Date().toLocaleDateString("en-IN"), 30, 8);
-  const bytes = await pdf.save(); const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-  a.download = `slip-${emp.full_name.replace(/\W+/g, "_")}-${run.month.slice(0, 7)}.pdf`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  const L = 40, Rr = 555; let y = 800;
+  const txt = (t, x, size = 10, bold = false, color = ink) => page.drawText(String(t), { x, y, size, font: bold ? fb : f, color });
+  const rtxt = (t, size = 10, bold = false, color = ink) => { const ft = bold ? fb : f; page.drawText(String(t), { x: Rr - ft.widthOfTextAtSize(String(t), size), y, size, font: ft, color }); };
+  page.drawRectangle({ x: 0, y: 770, width: 595, height: 72, color: green });
+  y = 812; page.drawText(gym.name || "Gym", { x: L, y, size: 20, font: fb, color: rgb(1, 1, 1) });
+  y = 794; page.drawText([gym.address, gym.phone].filter(Boolean).join("  |  ").slice(0, 95), { x: L, y, size: 9, font: f, color: rgb(0.9, 1, 0.95) });
+  y = 740; txt("SALARY SLIP", L, 14, true, green); rtxt(monthLabel(run.month), 12, true); y -= 28;
+  const info = [["Employee", emp.full_name], ["Employee ID", emp.employee_code || ""], ["Designation", emp.designation || "-"], ["Gym", gym.name || ""]];
+  info.forEach((r, i) => { const col = i % 2, row = Math.floor(i / 2); const x = col ? 310 : L, yy = y - row * 18; page.drawText(r[0] + ":", { x, y: yy, size: 9, font: f, color: grey }); page.drawText(String(r[1]), { x: x + 70, y: yy, size: 10, font: fb, color: ink }); });
+  y -= 50;
+  page.drawRectangle({ x: L, y: y - 8, width: Rr - L, height: 28, color: rgb(0.95, 0.96, 0.96) });
+  txt(`Present ${item.present_days}   Late ${item.late_count}   Absent ${item.absent_units}   Paid leave ${item.paid_leave_days}   Unpaid leave ${item.unpaid_leave_days}   Month days ${dimFromDate(run.month)}`, L + 8, 9);
+  y -= 40;
+  const section = (title, rows, totalLabel, total) => {
+    page.drawRectangle({ x: L, y: y - 6, width: Rr - L, height: 20, color: green }); txt(title, L + 8, 10, true, rgb(1, 1, 1)); y -= 26;
+    rows.forEach(([a, b]) => { txt(a, L + 8); rtxt(rs(b)); y -= 18; });
+    if (!rows.length) { txt("-", L + 8, 10, false, grey); y -= 18; }
+    page.drawLine({ start: { x: L, y: y + 12 }, end: { x: Rr, y: y + 12 }, thickness: 0.5, color: grey });
+    y -= 2; txt(totalLabel, L + 8, 10, true); rtxt(rs(total), 10, true); y -= 28;
+  };
+  const earn = [["Basic monthly salary", item.monthly_salary]];
+  if (Number(item.overtime_amount)) earn.push([`Overtime (${item.overtime_hours} h)`, item.overtime_amount]);
+  if (Number(item.incentive_amount)) earn.push(["Bonus / incentive", item.incentive_amount]);
+  if (Number(item.adj_earning)) earn.push(["Adjustment (added)", item.adj_earning]);
+  const gross = earn.reduce((a, r) => a + Number(r[1]), 0);
+  const ded = [];
+  if (Number(item.deduction_amount)) ded.push(["Absence / leave deduction", item.deduction_amount]);
+  if (Number(item.advance_recovery)) ded.push(["Salary advance recovery", item.advance_recovery]);
+  if (Number(item.adj_deduction)) ded.push(["Adjustment (deducted)", item.adj_deduction]);
+  const dtotal = ded.reduce((a, r) => a + Number(r[1]), 0);
+  section("EARNINGS", earn, "Gross earnings", gross);
+  section("DEDUCTIONS", ded, "Total deductions", dtotal);
+  page.drawRectangle({ x: L, y: y - 10, width: Rr - L, height: 34, color: rgb(0.93, 0.98, 0.95), borderColor: green, borderWidth: 1 });
+  y += 2; txt("NET PAYABLE SALARY", L + 10, 12, true, green); rtxt(rs(item.final_net), 14, true, green); y -= 40;
+  const status = payStatus(item);
+  txt("Payment status: " + status + (Number(item.paid_amount) ? "  (paid " + rs(item.paid_amount) + ")" : ""), L, 10, true); y -= 60;
+  txt("Generated on " + new Date().toLocaleDateString("en-IN"), L, 8, false, grey);
+  page.drawText("Computer generated slip - no signature required.", { x: 330, y, size: 8, font: f, color: grey });
+  const bytes = await pdf.save(); const name = `slip-${emp.full_name.replace(/\W+/g, "_")}-${run.month.slice(0, 7)}.pdf`;
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  if (share && navigator.canShare) {
+    const file = new File([blob], name, { type: "application/pdf" });
+    if (navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Salary slip" }); return; }
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
+const dimFromDate = (d) => dim(String(d).slice(0, 7));
 H.slip = async (d) => {
   const item = await q(sb.from("payroll_item_view").select("*").eq("id", d.id).single());
-  const [run, emp] = await Promise.all([q(sb.from("payroll_runs").select("*,gyms(name)").eq("id", item.run_id).single()), q(sb.from("employees").select("full_name,employee_code,designation").eq("id", item.employee_id).single())]);
-  await makeSlip(item, run, emp, run.gyms?.name || "Gym");
+  const [run, emp] = await Promise.all([q(sb.from("payroll_runs").select("*").eq("id", item.run_id).single()), q(sb.from("employees").select("full_name,employee_code,designation").eq("id", item.employee_id).single())]);
+  const g = await sb.from("gyms").select("name,address,phone").eq("id", run.gym_id).maybeSingle();
+  await makeSlip(item, run, emp, g.data || { name: "Gym" }, d.share === "1");
 };
+const slipLinks = (id) => `<a href="#" data-click="slip" data-id="${id}">Download</a>${navigator.canShare ? ` · <a href="#" data-click="slip" data-id="${id}" data-share="1">Share</a>` : ""}`;
 
 /* ================= staff salary ================= */
 R(/^\/salary$/, async () => {
   if (!isStaff()) return go("/payroll");
   const e = await myEmployee(); if (!e) return `<div class="card">Your login is not linked to an employee record yet.</div>`;
-  const items = await q(sb.from("payroll_item_view").select("*").eq("employee_id", e.id).order("month", { ascending: false }));
-  return `<h1>My salary</h1>` + table(["Month", ">Net", ">Paid", "Status", ""], items.map((i) => `<tr><td>${monthLabel(i.month)}</td><td class="right">${inr(i.final_net)}</td><td class="right">${inr(i.paid_amount)}</td><td class="cap">${i.run_status}</td><td class="right"><a href="#" data-click="slip" data-id="${i.id}">Slip</a></td></tr>`), "No salary slips yet. They appear after your manager approves the month.");
+  const [items, advs, reqs, recs] = await Promise.all([
+    q(sb.from("payroll_item_view").select("*").eq("employee_id", e.id).order("month", { ascending: false })),
+    q(sb.from("advances").select("*").eq("employee_id", e.id).order("issued_on", { ascending: false })),
+    q(sb.from("advance_requests").select("*").eq("employee_id", e.id).order("created_at", { ascending: false }).limit(10)),
+    sb.from("advance_recoveries").select("advance_id,amount"),
+  ]);
+  const rec = {}; (recs.data || []).forEach((r) => (rec[r.advance_id] = (rec[r.advance_id] || 0) + Number(r.amount)));
+  return `<h1>My salary</h1>` + table(["Month", ">Net", ">Paid", "Status", ""], items.map((i) => `<tr><td>${monthLabel(i.month)}</td><td class="right">${inr(i.final_net)}</td><td class="right">${inr(i.paid_amount)}</td><td>${payStatus(i)}</td><td class="right">${slipLinks(i.id)}</td></tr>`), "No salary slips yet. They appear after your manager approves the month.") +
+    `<h2>Salary advance</h2>` + (advs.length ? table(["Date", ">Advance", ">Per month", ">Balance"], advs.map((a) => `<tr><td>${a.issued_on}</td><td class="right">${inr(a.amount)}</td><td class="right">${inr(a.monthly_recovery)}</td><td class="right">${inr(Math.max(0, Number(a.amount) - (rec[a.id] || 0)))}</td></tr>`)) : `<p class="mut small">No advances taken.</p>`) +
+    `<form class="form card" data-submit="advRequest" data-emp="${e.id}" data-gym="${e.gym_id}">
+      ${field("Amount needed (₹)", inp("amount", { type: "number", min: 1, step: "0.01", required: true }))}${field("Reason", inp("reason"))}
+      <div class="full"><button class="btn">Request advance</button></div></form>` +
+    (reqs.length ? table(["Date", ">Amount", "Status"], reqs.map((r) => `<tr><td>${r.created_at.slice(0, 10)}</td><td class="right">${inr(r.amount)}</td><td class="cap">${r.status}${r.decision_note ? `<div class="small mut">${esc(r.decision_note)}</div>` : ""}</td></tr>`)) : "");
 });
+H.advRequest = async (fd, f) => { await q(sb.from("advance_requests").insert({ employee_id: f.dataset.emp, gym_id: f.dataset.gym, amount: Number(s(fd, "amount")), reason: v(fd, "reason") })); toast("Request sent"); route(); };
 
 /* ================= advances & bonus ================= */
 R(/^\/advances$/, async (_, qr) => {
   if (isStaff()) return go("/dashboard");
   const m = qr.month || monthIST();
-  const [emps, advs, incs] = await Promise.all([
+  const [emps, advs, incs, reqs, recs] = await Promise.all([
     q(sb.from("employees").select("id,full_name,gym_id").eq("is_active", true).order("full_name")),
     q(sb.from("advances").select("*").order("issued_on", { ascending: false }).limit(100)),
     q(sb.from("incentives").select("*").eq("month", m + "-01").order("created_at", { ascending: false })),
+    q(sb.from("advance_requests").select("*").eq("status", "pending").order("created_at")),
+    sb.from("advance_recoveries").select("advance_id,amount"),
   ]);
+  const rec = {}; (recs.data || []).forEach((r) => (rec[r.advance_id] = (rec[r.advance_id] || 0) + Number(r.amount)));
   const en = Object.fromEntries(emps.map((e) => [e.id, e.full_name]));
   const eo = emps.map((e) => [e.id, e.full_name]);
+  const bal = (a) => Math.max(0, Number(a.amount) - (rec[a.id] || 0));
   return `<h1>Advances &amp; bonus</h1>
+  ${reqs.length ? `<h2>Advance requests (${reqs.length})</h2>${reqs.map((r) => `<div class="card"><div class="row" style="margin:0 0 6px"><b>${esc(en[r.employee_id] || "")}</b><span>${inr(r.amount)}</span></div><div class="small mut">${esc(r.reason || "")}</div>
+    <form class="inline" style="margin-top:8px" data-submit="advDecide" data-id="${r.id}">${field("Approve amount", inp("amount", { type: "number", min: 1, step: "0.01", value: r.amount }))}${field("Recover per month", inp("monthly", { type: "number", min: 1, step: "0.01", value: Math.round(Number(r.amount) / 2) }))}${field("Note", inp("note"))}
+    <button class="btn" name="d" value="approve">Approve</button><button class="btn ghost" name="d" value="reject">Reject</button></form></div>`).join("")}` : ""}
   <h2>Give an advance</h2><form class="inline card" data-submit="advAdd">${field("Employee", sel("employee_id", eo, ""))}${field("Amount (₹)", inp("amount", { type: "number", min: 1, step: "0.01", required: true }))}${field("Recover per month (₹)", inp("monthly_recovery", { type: "number", min: 1, step: "0.01", required: true }))}${field("Date", inp("issued_on", { type: "date", required: true, value: todayIST() }))}${field("Note", inp("note"))}<button class="btn">Save advance</button></form>
-  ${table(["Date", "Employee", ">Amount", ">Per month", "Status"], advs.map((a) => `<tr><td>${a.issued_on}</td><td>${esc(en[a.employee_id] || "")}</td><td class="right">${inr(a.amount)}</td><td class="right">${inr(a.monthly_recovery)}</td><td class="cap">${a.status}</td></tr>`), "No advances.")}
+  ${table(["Date", "Employee", ">Amount", ">Per month", ">Balance", "Months left", "Status"], advs.map((a) => `<tr><td>${a.issued_on}</td><td>${esc(en[a.employee_id] || "")}</td><td class="right">${inr(a.amount)}</td><td class="right">${inr(a.monthly_recovery)}</td><td class="right">${inr(bal(a))}</td><td>${bal(a) ? Math.ceil(bal(a) / Number(a.monthly_recovery)) : "–"}</td><td class="cap">${a.status}</td></tr>`), "No advances.")}
   <h2>Bonus / incentive</h2>
   <form class="inline card" data-submit="incAdd">${field("Employee", sel("employee_id", eo, ""))}${field("Month", inp("month", { type: "month", required: true, value: m }))}${field("Kind", inp("kind", { value: "bonus", required: true }))}${field("Amount (₹)", inp("amount", { type: "number", min: 1, step: "0.01", required: true }))}${field("Note", inp("note"))}<button class="btn">Save bonus</button></form>
   <form class="inline" data-submit="filter" data-path="/advances">${field("Show month", monthInput("month", m))}</form><div style="height:12px"></div>
   ${table(["Employee", "Kind", ">Amount", "Note"], incs.map((i) => `<tr><td>${esc(en[i.employee_id] || "")}</td><td>${esc(i.kind)}</td><td class="right">${inr(i.amount)}</td><td>${esc(i.note || "")}</td></tr>`), "No bonus this month.")}`;
 });
+H.advDecide = async (fd, f, btn) => {
+  const ok = btn?.value === "approve";
+  await q(sb.rpc("decide_advance_request", { p_id: f.dataset.id, p_approve: ok, p_amount: ok ? Number(s(fd, "amount")) : null, p_monthly: ok ? Number(s(fd, "monthly")) : null, p_note: v(fd, "note") }));
+  toast("Done"); route();
+};
 H.advAdd = async (fd) => {
   const emp = await q(sb.from("employees").select("gym_id").eq("id", s(fd, "employee_id")).single());
   await q(sb.from("advances").insert({ employee_id: s(fd, "employee_id"), gym_id: emp.gym_id, amount: Number(s(fd, "amount")), monthly_recovery: Number(s(fd, "monthly_recovery")), issued_on: s(fd, "issued_on"), note: v(fd, "note"), created_by: S.user.id }));
@@ -679,6 +840,7 @@ R(/^\/users$/, async () => {
     ${field("Role", sel("role", [["staff", "Staff"], ["gym_manager", "Gym manager"]], "staff"))}
     ${field("Link to employee (for staff)", sel("employee_id", [["", "— none / link later —"], ...emps.map((e) => [e.id, `${e.full_name} (${e.employee_code})`])], ""), "full")}
     <div class="full"><button class="btn">Create login</button></div></form>` +
+    `<details class="card"><summary>What each role can do</summary><table><thead><tr><th>Feature</th><th>Admin</th><th>Gym manager</th><th>Staff</th></tr></thead><tbody>${[["View gyms", "All", "Assigned only", "–"], ["Add / edit employees", "Yes", "If permitted", "No"], ["View attendance", "All", "Assigned gyms", "Own"], ["Correct attendance", "Yes", "If permitted", "Request"], ["Approve leave", "Yes", "If permitted", "Request"], ["Generate / approve payroll", "Yes", "If permitted", "No"], ["View salary", "All", "If permitted", "Own"], ["Set salary and rules", "Yes", "If permitted", "No"], ["Manage users", "Yes", "No", "No"]].map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table><p class="small mut">These rules are enforced by the database itself, not only by hiding menus.</p></details>` +
     table(["Name", "Email", "Role", "Status", ""], users.map((u) => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.email || "")}</td><td>${ROLE[u.role]}</td><td>${u.is_active ? "Active" : '<span class="mut">Inactive</span>'}</td><td class="right"><a href="#/users/${u.id}">Open</a></td></tr>`));
 });
 H.userCreate = async (fd) => {
@@ -732,6 +894,76 @@ R(/^\/profile$/, async () => {
   <h2>Change password</h2><form class="inline card" data-submit="myPassword">${field("New password (min 8)", inp("password", { type: "password", minlength: 8, required: true, autocomplete: "new-password" }))}<button class="btn">Change</button></form>`;
 });
 H.myPassword = async (fd, f) => { const { error } = await sb.auth.updateUser({ password: s(fd, "password") }); if (error) throw error; toast("Password changed"); f.reset(); };
+
+/* ================= reports ================= */
+const REPORTS = {
+  daily: ["Daily attendance", ["date", "gym"]], monthly: ["Monthly attendance (employee-wise)", ["month", "gym"]], gymwise: ["Gym-wise attendance", ["month"]],
+  late: ["Late arrivals", ["month", "gym"]], overtime: ["Overtime", ["month", "gym"]], payroll: ["Monthly payroll", ["month", "gym"]],
+  payments: ["Salary payments (paid / pending)", ["month", "gym"]], leave: ["Leave report", ["month", "gym"]], advances: ["Outstanding advances", ["gym"]], employees: ["Employee list", ["gym"]],
+};
+async function buildReport(kind, p) {
+  const m = p.month || monthIST(), d1 = m + "-01", d2 = m + "-" + dim(m);
+  const gymF = (qb) => (p.gym ? qb.eq("gym_id", p.gym) : qb);
+  const emps = await q(sb.from("employees").select("id,full_name,employee_code,gym_id,designation,phone,is_active,joining_date"));
+  const en = Object.fromEntries(emps.map((e) => [e.id, e])); const gyms = await gymsList(); const gn = Object.fromEntries(gyms.map((g) => [g.id, g.name]));
+  const nm = (id) => en[id]?.full_name || "";
+  if (kind === "daily") {
+    const date = p.date || todayIST(); const atts = await q(gymF(sb.from("attendance").select("*").eq("work_date", date)));
+    const by = Object.fromEntries(atts.map((a) => [a.employee_id, a]));
+    return { head: ["Employee", "Gym", "Status", "In", "Out", "Hours"], rows: emps.filter((e) => e.is_active && (!p.gym || e.gym_id === p.gym)).map((e) => { const a = by[e.id]; return [e.full_name, gn[e.gym_id], a ? label(a.status) : "Not marked", a ? timeIST(a.check_in) : "", a ? timeIST(a.check_out) : "", a?.check_in && a?.check_out ? fmtDur(new Date(a.check_out) - new Date(a.check_in)) : ""]; }) };
+  }
+  if (kind === "monthly" || kind === "late" || kind === "gymwise") {
+    const atts = await q(gymF(sb.from("attendance").select("employee_id,gym_id,status,check_in,check_out,work_date").gte("work_date", d1).lte("work_date", d2)));
+    if (kind === "gymwise") {
+      const g = {}; atts.forEach((a) => { const o = (g[a.gym_id] ||= { p: 0, l: 0, h: 0, a: 0, lv: 0 }); if (a.status === "present") o.p++; else if (a.status === "late") o.l++; else if (a.status === "half_day") o.h++; else if (a.status === "absent") o.a++; else if (a.status.endsWith("leave")) o.lv++; });
+      return { head: ["Gym", "Present", "Late", "Half day", "Absent", "Leave", "Attendance %"], rows: gyms.filter((x) => g[x.id]).map((x) => { const o = g[x.id], t = o.p + o.l + o.h + o.a + o.lv; return [x.name, o.p, o.l, o.h, o.a, o.lv, t ? Math.round(((o.p + o.l + o.h * 0.5) / t) * 100) + "%" : ""]; }) };
+    }
+    const c = {}; atts.forEach((a) => { const o = (c[a.employee_id] ||= { p: 0, l: 0, h: 0, a: 0, pl: 0, ul: 0, miss: 0 }); if (a.status === "present") o.p++; else if (a.status === "late") o.l++; else if (a.status === "half_day") o.h++; else if (a.status === "absent") o.a++; else if (a.status === "paid_leave") o.pl++; else if (a.status === "unpaid_leave") o.ul++; if (a.check_in && !a.check_out && a.work_date < todayIST()) o.miss++; });
+    const ids = Object.keys(c).sort((x, y) => nm(x).localeCompare(nm(y)));
+    if (kind === "late") return { head: ["Employee", "Gym", "Late days"], rows: ids.filter((i) => c[i].l).sort((x, y) => c[y].l - c[x].l).map((i) => [nm(i), gn[en[i]?.gym_id], c[i].l]) };
+    return { head: ["Employee", "Gym", "Present", "Late", "Half day", "Absent", "Paid leave", "Unpaid leave", "Missing punch"], rows: ids.map((i) => [nm(i), gn[en[i]?.gym_id], c[i].p, c[i].l, c[i].h, c[i].a, c[i].pl, c[i].ul, c[i].miss]) };
+  }
+  if (kind === "payroll" || kind === "payments" || kind === "overtime") {
+    const items = await q(gymF(sb.from("payroll_item_view").select("*").eq("month", d1)));
+    const sorted = items.sort((a, b) => nm(a.employee_id).localeCompare(nm(b.employee_id)));
+    if (kind === "overtime") return { head: ["Employee", "Gym", "OT hours", "OT amount"], rows: sorted.filter((i) => Number(i.overtime_hours)).map((i) => [nm(i.employee_id), gn[i.gym_id], i.overtime_hours, Number(i.overtime_amount)]) };
+    if (kind === "payments") return { head: ["Employee", "Gym", "Net salary", "Paid", "Pending", "Status"], rows: sorted.map((i) => [nm(i.employee_id), gn[i.gym_id], Number(i.final_net), Number(i.paid_amount), Math.max(0, Number(i.final_net) - Number(i.paid_amount)), i.run_status === "draft" ? "Draft" : payStatus(i)]) };
+    return { head: ["Employee", "Gym", "Salary", "Deduction", "Overtime", "Bonus", "Advance", "Adjust", "Net"], rows: sorted.map((i) => [nm(i.employee_id), gn[i.gym_id], Number(i.monthly_salary), Number(i.deduction_amount), Number(i.overtime_amount), Number(i.incentive_amount), Number(i.advance_recovery), Number(i.adj_earning) - Number(i.adj_deduction), Number(i.final_net)]) };
+  }
+  if (kind === "leave") {
+    const ls = await q(gymF(sb.from("leave_requests").select("*").lte("from_date", d2).gte("to_date", d1).order("from_date")));
+    return { head: ["Employee", "Gym", "From", "To", "Status", "Type", "Reason"], rows: ls.map((l) => [nm(l.employee_id), gn[l.gym_id], l.from_date, l.to_date, l.status, l.approved_type || "", l.reason || ""]) };
+  }
+  if (kind === "advances") {
+    const [advs, recs] = await Promise.all([q(gymF(sb.from("advances").select("*").order("issued_on"))), sb.from("advance_recoveries").select("advance_id,amount")]);
+    const rec = {}; (recs.data || []).forEach((r) => (rec[r.advance_id] = (rec[r.advance_id] || 0) + Number(r.amount)));
+    return { head: ["Employee", "Gym", "Date", "Advance", "Recovered", "Balance"], rows: advs.map((a) => [nm(a.employee_id), gn[a.gym_id], a.issued_on, Number(a.amount), rec[a.id] || 0, Math.max(0, Number(a.amount) - (rec[a.id] || 0))]).filter((r) => r[5] > 0) };
+  }
+  return { head: ["Code", "Name", "Gym", "Designation", "Phone", "Joined", "Status"], rows: emps.filter((e) => !p.gym || e.gym_id === p.gym).map((e) => [e.employee_code, e.full_name, gn[e.gym_id], e.designation || "", e.phone || "", e.joining_date, e.is_active ? "Active" : "Inactive"]) };
+}
+let lastReport = null;
+R(/^\/reports$/, async (_, qr) => {
+  if (isStaff()) return go("/dashboard");
+  const kind = REPORTS[qr.r] ? qr.r : "daily"; const need = REPORTS[kind][1]; const gyms = await gymsList();
+  const rep = await buildReport(kind, qr); lastReport = { kind, ...rep, month: qr.month || monthIST() };
+  const num = (x) => typeof x === "number";
+  const money = /Salary|Deduction|Overtime|Bonus|Advance|Adjust|Net|Paid|Pending|Recovered|Balance|OT amount/;
+  return `<div class="row"><h1>Reports</h1><div class="actions"><button class="btn ghost" data-click="repCsv">Download Excel (CSV)</button><button class="btn ghost" data-click="repPrint">Print / PDF</button></div></div>
+  <form class="inline card" data-submit="filter" data-path="/reports">
+    ${field("Report", sel("r", Object.entries(REPORTS).map(([k, x]) => [k, x[0]]), kind, 'onchange="this.form.requestSubmit()"'))}
+    ${need.includes("gym") ? field("Gym", sel("gym", [["", "All gyms"], ...gyms.map((g) => [g.id, g.name])], qr.gym || "", 'onchange="this.form.requestSubmit()"')) : ""}
+    ${need.includes("month") ? field("Month", monthInput("month", qr.month || monthIST())) : ""}
+    ${need.includes("date") ? field("Date", inp("date", { type: "date", value: qr.date || todayIST(), onchange: "this.form.requestSubmit()" })) : ""}</form>
+  <h2>${esc(REPORTS[kind][0])}</h2>
+  <div class="card flush"><table><thead><tr>${rep.head.map((x) => `<th>${esc(x)}</th>`).join("")}</tr></thead><tbody>${rep.rows.map((r) => `<tr>${r.map((c, i) => `<td${num(c) ? ' class="right"' : ""}>${num(c) && money.test(rep.head[i]) ? inr(c) : esc(c)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${rep.head.length}" class="mut">No data for these filters (or you don't have permission to view it).</td></tr>`}</tbody></table></div>`;
+});
+H.repCsv = () => {
+  if (!lastReport) return;
+  const cell = (c) => '"' + String(c ?? "").replace(/"/g, '""') + '"';
+  const csv = "﻿" + [lastReport.head, ...lastReport.rows].map((r) => r.map(cell).join(",")).join("\r\n");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); a.download = `report-${lastReport.kind}-${lastReport.month}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+H.repPrint = () => window.print();
 
 /* ================= boot ================= */
 (async () => {
