@@ -11,16 +11,16 @@ Staff attendance and salary management for the gyms. Next.js + Supabase (Postgre
 Cut method (daily / shift / hourly), divisor (fixed 30 by default), late marks per half day, optional overtime (off by default).
 Deduction = monthly salary ÷ divisor × units missed.
 
-## Setup
-1. `npm install`
-2. Copy `.env.example` to `.env.local` and fill `SUPABASE_SERVICE_ROLE_KEY` (Supabase dashboard > Project Settings > API Keys > secret key).
-3. `npm run dev`, open the app, click **Create the admin account** on the login page (works only while no account exists).
-4. Supabase dashboard > Authentication > Sign In / Providers: turn **off** "Allow new users to sign up". Logins are created by the admin inside the app.
+## Hosting (free, GitHub Pages)
+The app is one file: `docs/index.html`. It talks straight to Supabase (login, database rules, and the `team-admin` Edge Function for creating logins), so no server is needed.
+1. GitHub repo > Settings > Pages > Deploy from branch `main`, folder `/docs`.
+2. The site is at `https://<user>.github.io/gym-staff-payroll/`.
+3. Supabase dashboard > Authentication > Sign In / Providers: turn **off** "Allow new users to sign up", and turn on leaked-password protection.
+The Supabase publishable key inside the file is public by design; data is protected by row-level security. Never put the secret/service key in the repo.
 
-The schema is in `supabase/migrations/`. It is already applied to the `gym-staff-payroll` Supabase project.
+The older Next.js app (`src/`) is no longer used.
 
-## Deploy (Vercel)
-Add the three variables from `.env.example` to the Vercel project. `SUPABASE_SERVICE_ROLE_KEY` must stay server-side only.
+The schema is in `supabase/migrations/`; the Edge Function source is `supabase/functions/team-admin/index.ts`.
 
 ## What is in it
 - **Gyms, employees, shifts, holidays**; salary rules per gym.
