@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
@@ -17,12 +18,14 @@ export type Perms = Record<PermKey, boolean>;
 const ALL_TRUE = Object.fromEntries(Object.keys(PERMISSION_LABELS).map((k) => [k, true])) as Perms;
 const ALL_FALSE = Object.fromEntries(Object.keys(PERMISSION_LABELS).map((k) => [k, false])) as Perms;
 
-export async function getSession() {
+// cache(): the layout and the page both call this, but it runs only once per request.
+// getClaims() checks the sign-in token locally instead of calling Supabase's auth server each time.
+export const getSession = cache(async () => {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  const { data: auth } = await supabase.auth.getClaims();
+  const claims = auth?.claims;
+  if (!claims) redirect("/login");
+  const user = { id: claims.sub as string, email: (claims.email as string | undefined) ?? null };
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -41,7 +44,7 @@ export async function getSession() {
     if (data) perms = { ...ALL_FALSE, ...(data as Partial<Perms>) };
   }
   return { supabase, user, profile: profile as { id: string; full_name: string; role: Role; is_active: boolean }, perms };
-}
+});
 
 /** Use at the top of pages that only some roles may open. Database RLS still enforces the real rule. */
 export async function requireRole(roles: Role[]) {
