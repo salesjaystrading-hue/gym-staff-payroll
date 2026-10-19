@@ -71,6 +71,26 @@ a{color:var(--pri)}
 .login .logo{width:62px;height:62px;border-radius:18px;font-size:32px;margin:0 auto 14px}
 .login .card{padding:24px;border-radius:20px;box-shadow:0 20px 50px #0f172a1f}
 .login h1{text-align:center;font-size:25px;margin:0 0 4px}.login p.sub{text-align:center;color:var(--mut);margin:0 0 18px}
+body.pubbody{background:#0b1730;color:#f1f5f9}body.pubbody::before{display:none}
+.pub{max-width:520px;margin:0 auto;padding:22px 18px;min-height:100vh}
+.pub h1{text-align:center;font-size:20px;letter-spacing:.06em;margin:0 0 6px;color:#fff}
+.pub-sub{color:#94a3b8;font-size:14px}
+.pub-card{background:#12213f;border:1px solid #243558;border-radius:16px;padding:20px;margin-top:16px}
+.pl{display:block;font-size:13px;font-weight:600;color:#cbd5e1;margin-bottom:14px}
+.pin-in{display:block;width:100%;margin-top:6px;padding:15px;font-size:20px;border-radius:12px;border:1px solid #334a75;background:#0b1730;color:#fff;letter-spacing:.08em}
+.pin-in:focus{outline:none;border-color:#10b981;box-shadow:0 0 0 4px #10b98133}
+.pub-btn{width:100%;padding:16px;border:0;border-radius:12px;background:#10b981;color:#052e22;font-size:16px;font-weight:800;letter-spacing:.04em;cursor:pointer}
+.pub-btn:disabled{opacity:.5}
+.pub-err{color:#fca5a5;min-height:20px;margin:0 0 10px;font-weight:600}
+.display{max-width:760px;display:flex;flex-direction:column;align-items:center;text-align:center}
+.pub-top{display:flex;align-items:center;gap:14px;width:100%;text-align:left}
+.pub-gym{font-size:clamp(22px,5vw,34px);font-weight:800;color:#fff;line-height:1.15}
+.pub-status{display:flex;align-items:center;gap:8px;font-size:13px;color:#94a3b8;white-space:nowrap}
+.pub-status i{width:10px;height:10px;border-radius:50%;background:#64748b}.pub-status.on i{background:#10b981;box-shadow:0 0 0 4px #10b98133}.pub-status.off i{background:#f59e0b}
+.pub-qrwrap{margin:24px 0 14px;background:#fff;border-radius:22px;padding:18px;width:min(86vw,520px)}
+.pub-qr svg{width:100%;height:auto;display:block}
+.pub-count b{font-size:clamp(20px,4vw,28px);color:#34d399}
+.pub-help{font-size:clamp(16px,3.4vw,22px);color:#e2e8f0;max-width:520px}
 @media print{header.top,nav#nav,.btn,.actions,form.inline,#toast{display:none!important}.card{border:0;box-shadow:none}body{background:#fff;color:#000}body::before{display:none}}
 @media(max-width:760px){
  .layout{flex-direction:column;gap:10px}
@@ -163,6 +183,7 @@ function menu() {
   if (r === "admin" || p.can_edit_attendance) m.splice(4, 0, ["/roster", "Roster"]);
   if (p.can_approve_payroll || p.can_view_salaries) m.push(["/payroll", "Payroll"]);
   if (p.can_configure_salary || p.can_approve_payroll) m.push(["/advances", "Advances & bonus"]);
+  if (r === "admin" || p.can_manage_employees) m.splice(3, 0, ["/pins", "PINs"]);
   m.push(["/reports", "Reports"]);
   if (r === "admin") m.push(["/users", "Users & permissions"]);
   return m;
@@ -187,7 +208,7 @@ function renderShell() {
 }
 
 function renderNav(path) {
-  const IC = { "/dashboard": "🏠", "/gyms": "🏢", "/employees": "👥", "/attendance": "🗓️", "/roster": "📅", "/leave": "🌴", "/payroll": "💰", "/advances": "💸", "/reports": "📊", "/users": "🔐", "/salary": "🧾", "/profile": "👤" };
+  const IC = { "/dashboard": "🏠", "/gyms": "🏢", "/employees": "👥", "/attendance": "🗓️", "/roster": "📅", "/pins": "🔢", "/leave": "🌴", "/payroll": "💰", "/advances": "💸", "/reports": "📊", "/users": "🔐", "/salary": "🧾", "/profile": "👤" };
   $("#nav").innerHTML = menu().map(([h, t]) => `<a href="#${h}" class="${path === h || (h !== "/dashboard" && path.startsWith(h)) ? "on" : ""}"><span class="ic">${IC[h] || "•"}</span><span>${esc(t)}</span></a>`).join("");
 }
 
@@ -196,6 +217,9 @@ const R = (re, fn) => routes.push([re, fn]);
 
 async function route() {
   timers.forEach(clearInterval); timers = [];
+  const rawHash = location.hash.slice(1);
+  if (PUBLIC_RE.test(rawHash)) return publicPage(rawHash);
+  document.body.classList.remove("pubbody");
   if (!S.user) return renderLogin();
   const [pathRaw, qs] = (location.hash.slice(1) || "/dashboard").split("?");
   const path = pathRaw || "/dashboard";
@@ -613,16 +637,25 @@ R(/^\/attendance\/register$/, async (_, qr) => {
 R(/^\/attendance\/qr$/, async (_, qr) => {
   if (isStaff()) return go("/attendance");
   const gyms = await gymsList(); const gid = qr.gym || gyms[0]?.id; const g = gyms.find((x) => x.id === gid);
+  let dispHtml = "";
+  if (isAdmin() || S.perms.can_edit_attendance) {
+    const dts = await q(sb.from("display_tokens").select("id,label,expires_at,revoked_at,last_used_at,created_at").eq("gym_id", gid).order("created_at", { ascending: false }).limit(10));
+    dispHtml = `<h2>Gym display link</h2><p class="small mut">Open a display link once on the phone kept at the gym. It only shows this gym's QR code, expires on its own, and can be revoked here. No admin login is needed on that phone.</p>
+      <div id="newlink"></div>
+      <form class="inline card" data-submit="dispCreate" data-gym="${gid}">${field("Label", inp("label", { placeholder: "Reception phone" }))}${field("Valid for", sel("days", [[30, "30 days"], [60, "60 days"], [90, "90 days"]], 30))}<button class="btn">Create display link</button></form>` +
+      table(["Label", "Status", "Last used", ""], dts.map((d) => { const dead = d.revoked_at || new Date(d.expires_at) < new Date(); return `<tr><td>${esc(d.label || "Display")}</td><td>${d.revoked_at ? "Revoked" : dead ? "Expired" : "Active until " + d.expires_at.slice(0, 10)}</td><td class="small">${d.last_used_at ? new Date(d.last_used_at).toLocaleString("en-IN") : "never"}</td><td class="right">${dead ? "" : `<a href="#" data-click="dispRevoke" data-id="${d.id}">Revoke</a>`}</td></tr>`; }), "No display links yet.");
+  }
   return {
     html: `<div class="row"><h1>QR check-in</h1><a class="btn ghost" href="#/attendance?gym=${gid}">Back</a></div>
     ${gymPicker(gyms, gid, "/attendance/qr")}
     <div class="card center"><p><b>${esc(g?.name || "")}</b></p><div id="qrbox" style="display:inline-block;background:#fff;padding:12px;border-radius:8px"></div>
-    <p class="small mut" id="qrnote">Loading…</p><p class="small mut">Staff scan this with their phone camera. It changes every 30 seconds, so a photo of it will not work later.</p></div>`,
+    <p class="small mut" id="qrnote">Loading…</p><p class="small mut">Staff scan this with their phone camera, then enter their Employee ID and PIN. It changes every 30 seconds, so a photo of it will not work later.</p></div>
+    ${dispHtml}`,
     after() {
       const draw = async () => {
         try {
           const t = await q(sb.rpc("rotate_gym_qr", { p_gym: gid }));
-          const url = location.origin + location.pathname + "#/checkin?t=" + t;
+          const url = location.origin + location.pathname + "#/mark?c=" + t;
           const code = qrcode(0, "M"); code.addData(url); code.make();
           const box = $("#qrbox"); if (!box) return;
           box.innerHTML = code.createSvgTag({ cellSize: 6, margin: 0, scalable: true });
@@ -1060,10 +1093,105 @@ H.rosterCopy = async (d) => {
   toast("Copied"); route();
 };
 
+/* ================= public pages (no login) ================= */
+const PUBLIC_RE = /^\/(display|mark)(\?|$)/;
+async function publicPage(raw) {
+  const [path, qs] = raw.split("?"); const qy = Object.fromEntries(new URLSearchParams(qs || ""));
+  document.body.classList.remove("staff"); document.body.classList.add("pubbody");
+  return path === "/display" ? displayPage(qy.t) : markPage(qy.c);
+}
+
+function displayPage(token) {
+  $("#app").innerHTML = `<div class="pub display"><div class="pub-top"><div class="logo">🏋️</div><div style="flex:1;min-width:0"><div class="pub-gym" id="dGym">Loading…</div><div class="pub-sub" id="dSub"></div></div><div class="pub-status" id="dStatus"><i></i><span>Connecting…</span></div></div>
+    <div class="pub-qrwrap"><div id="dQr" class="pub-qr"></div></div>
+    <div class="pub-count"><b id="dCount">–</b><div class="pub-sub" id="dLast"></div></div>
+    <p class="pub-help">Scan this code with your phone camera, then enter your <b>Employee ID</b> and <b>PIN</b>.</p></div>`;
+  if (!token) { $("#dGym").textContent = "Display link missing"; $("#dStatus").lastChild.textContent = "Ask your manager for a new display link"; return; }
+  let last = 0, busy = false, dead = false;
+  const status = (ok, text) => { const s = $("#dStatus"); if (!s) return; s.className = "pub-status " + (ok ? "on" : "off"); s.lastChild.textContent = text; };
+  const refresh = async () => {
+    if (busy || dead) return; busy = true;
+    try {
+      const r = await q(sb.rpc("display_refresh", { p_token: token }));
+      if (!r.ok) { dead = true; $("#dGym").textContent = "Display not available"; $("#dQr").innerHTML = `<p style="color:#0b1730;padding:20px">${esc(r.message)}</p>`; status(false, "Stopped"); return; }
+      const code = qrcode(0, "M"); code.addData(location.origin + location.pathname + "#/mark?c=" + r.challenge); code.make();
+      $("#dQr").innerHTML = code.createSvgTag({ cellSize: 6, margin: 0, scalable: true });
+      $("#dGym").textContent = r.gym_name; $("#dSub").textContent = [r.gym_code, r.address].filter(Boolean).join(" · ");
+      last = Date.now(); status(true, "Online");
+      $("#dLast").textContent = "Updated " + new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    } catch (e) {
+      status(false, "Reconnecting…");
+      if (last && Date.now() - last > 70000) $("#dQr").innerHTML = `<p style="color:#0b1730;padding:20px">Reconnecting…</p>`;
+    } finally { busy = false; }
+  };
+  const tick = () => { if (dead) return; const left = Math.max(0, 30 - Math.floor((Date.now() - last) / 1000)); const c = $("#dCount"); if (c) c.textContent = last ? "New code in " + left + "s" : "–"; if (!last || left === 0) refresh(); };
+  refresh(); timers.push(setInterval(tick, 1000));
+  window.addEventListener("online", refresh, { once: true });
+  try { navigator.wakeLock && navigator.wakeLock.request("screen").catch(() => {}); } catch {}
+}
+
+async function markPage(c) {
+  let g = null;
+  try { const r = await q(sb.rpc("challenge_gym", { p_challenge: c || "" })); if (r.ok) g = r; } catch {}
+  $("#app").innerHTML = `<div class="pub mark"><div class="logo" style="margin:0 auto 12px">🏋️</div><h1>GYM STAFF ATTENDANCE</h1>
+    ${g ? `<p class="pub-sub" style="text-align:center">Gym: <b>${esc(g.code)} - ${esc(g.name)}</b></p>
+    <form class="pub-card" data-submit="markSubmit" data-c="${esc(c)}" autocomplete="off">
+      <label class="pl">Employee ID<input class="pin-in" name="code" required autocapitalize="characters" autocomplete="off" placeholder="Enter Employee ID"></label>
+      <label class="pl">Personal PIN<input class="pin-in" name="pin" type="password" required inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="Enter PIN"></label>
+      <p class="pub-err" id="markErr" role="alert"></p><button class="pub-btn">VERIFY &amp; CONTINUE</button></form>`
+    : `<div class="pub-card center"><div class="big">⏱️</div><p>This QR code has expired or is not valid.</p><p class="pub-sub">Scan the code that is currently showing at the gym.</p></div>`}</div>`;
+}
+H.markSubmit = async (fd, f) => {
+  const err = $("#markErr"); err.textContent = "";
+  const r = await q(sb.rpc("pin_check_in", { p_challenge: f.dataset.c, p_code: s(fd, "code"), p_pin: s(fd, "pin") }));
+  if (!r.ok) { err.textContent = r.message; f.reset(); return; }
+  f.parentElement.innerHTML = `<div class="pub-card center"><div class="big">✅</div><h2 style="font-size:20px;margin:6px 0">${esc(r.name || "")}</h2><p style="font-size:18px;margin:4px 0"><b>${esc(r.message)}</b></p><p class="pub-sub">You can close this page now.</p></div>`;
+};
+
+/* ================= PIN management ================= */
+R(/^\/pins$/, async (_, qr) => {
+  if (isStaff() || !(isAdmin() || S.perms.can_manage_employees)) return `<div class="card">Not allowed.</div>`;
+  const gyms = await gymsList(); const gid = qr.gym || gyms[0]?.id;
+  if (!gid) return `<div class="card">No gyms yet.</div>`;
+  const [emps, have] = await Promise.all([q(sb.from("employees").select("id,full_name,employee_code").eq("gym_id", gid).eq("is_active", true).order("full_name")), q(sb.rpc("employees_with_pin"))]);
+  const hs = new Set(have);
+  return `<div class="row"><h1>Employee PINs</h1><button class="btn" data-click="pinAll" data-gym="${gid}">Generate PINs for everyone without one</button></div>
+  <p class="small mut">Employees mark attendance with their Employee ID and a personal 6-digit PIN. A PIN is shown only once when generated, and only a scrambled copy is stored. After 5 wrong tries an employee is locked out for 15 minutes; generating a new PIN unlocks them.</p>
+  ${gymPicker(gyms, gid, "/pins")}<div style="height:12px"></div><div id="pinout"></div>` +
+    table(["Employee ID", "Name", "PIN", ""], emps.map((e) => `<tr><td>${esc(e.employee_code)}</td><td>${esc(e.full_name)}</td><td>${hs.has(e.id) ? '<span class="badge">Set</span>' : '<span class="warn">Not set</span>'}</td><td class="right"><a href="#" data-click="pinOne" data-id="${e.id}" data-code="${esc(e.employee_code)}" data-name="${esc(e.full_name)}">${hs.has(e.id) ? "Reset PIN" : "Generate PIN"}</a></td></tr>`), "No active employees in this gym.");
+});
+const pinBox = (rows) => `<div class="card"><h2>New PINs – write them down now, they are not shown again</h2><table><thead><tr><th>Employee ID</th><th>Name</th><th>PIN</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td><b style="font-size:18px;letter-spacing:.15em">${esc(r.pin)}</b></td></tr>`).join("")}</tbody></table><div class="actions" style="margin-top:10px"><button class="btn ghost" data-click="repPrint">Print</button></div></div>`;
+H.pinOne = async (d) => {
+  if (!confirm(`Generate a new PIN for ${d.name}? The old PIN stops working.`)) return;
+  const pin = await q(sb.rpc("set_employee_pin", { p_emp: d.id }));
+  $("#pinout").innerHTML = pinBox([{ code: d.code, name: d.name, pin }]); toast("PIN created");
+};
+H.pinAll = async (d) => {
+  const [emps, have] = await Promise.all([q(sb.from("employees").select("id,full_name,employee_code").eq("gym_id", d.gym).eq("is_active", true).order("full_name")), q(sb.rpc("employees_with_pin"))]);
+  const hs = new Set(have), todo = emps.filter((e) => !hs.has(e.id));
+  if (!todo.length) return toast("Everyone already has a PIN");
+  const out = [];
+  for (const e of todo) out.push({ code: e.employee_code, name: e.full_name, pin: await q(sb.rpc("set_employee_pin", { p_emp: e.id })) });
+  $("#pinout").innerHTML = pinBox(out); toast(out.length + " PINs created");
+};
+
+/* ================= display links (on the QR page) ================= */
+H.dispCreate = async (fd, f) => {
+  const t = await q(sb.rpc("create_display_token", { p_gym: f.dataset.gym, p_label: s(fd, "label"), p_days: Number(s(fd, "days")) }));
+  const url = location.origin + location.pathname + "#/display?t=" + t;
+  $("#newlink").innerHTML = `<div class="card"><b>Display link created – copy it now, it is shown only once.</b><p class="small" style="word-break:break-all;margin:8px 0">${esc(url)}</p>
+    <div class="actions" style="justify-content:flex-start"><button class="btn" data-click="copyText" data-text="${esc(url)}">Copy link</button><a class="btn ghost" href="${esc(url)}" target="_blank" rel="noopener">Open display</a></div>
+    <p class="small mut">Open this link once on the phone kept at the gym and leave it on the screen. Revoke it below if the phone is lost.</p></div>`;
+};
+H.copyText = async (d) => { try { await navigator.clipboard.writeText(d.text); toast("Copied"); } catch { toast("Press and hold the link to copy", true); } };
+H.dispRevoke = async (d) => { if (!confirm("Revoke this display link? The screen using it will stop.")) return; await q(sb.rpc("revoke_display_token", { p_id: d.id })); toast("Revoked"); route(); };
+
 /* ================= boot ================= */
 (async () => {
   try {
-    if (await loadSession()) { renderShell(); await route(); } else renderLogin();
+    const ok = await loadSession();
+    if (PUBLIC_RE.test(location.hash.slice(1))) await route();
+    else if (ok) { renderShell(); await route(); } else renderLogin();
   } catch (e) { renderLogin("Could not connect: " + errMsg(e)); }
 })();
 </script>
