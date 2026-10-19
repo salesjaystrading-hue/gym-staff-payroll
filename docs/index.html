@@ -160,6 +160,7 @@ function menu() {
   const r = S.profile.role, p = S.perms;
   if (r === "staff") return [["/dashboard", "Home"], ["/attendance", "Attendance"], ["/leave", "Leave"], ["/salary", "Salary"], ["/profile", "Profile"]];
   const m = [["/dashboard", "Dashboard"], ["/gyms", r === "admin" ? "Gyms" : "My gyms"], ["/employees", "Employees"], ["/attendance", "Attendance"], ["/leave", "Leave"]];
+  if (r === "admin" || p.can_edit_attendance) m.splice(4, 0, ["/roster", "Roster"]);
   if (p.can_approve_payroll || p.can_view_salaries) m.push(["/payroll", "Payroll"]);
   if (p.can_configure_salary || p.can_approve_payroll) m.push(["/advances", "Advances & bonus"]);
   m.push(["/reports", "Reports"]);
@@ -186,7 +187,7 @@ function renderShell() {
 }
 
 function renderNav(path) {
-  const IC = { "/dashboard": "🏠", "/gyms": "🏢", "/employees": "👥", "/attendance": "🗓️", "/leave": "🌴", "/payroll": "💰", "/advances": "💸", "/reports": "📊", "/users": "🔐", "/salary": "🧾", "/profile": "👤" };
+  const IC = { "/dashboard": "🏠", "/gyms": "🏢", "/employees": "👥", "/attendance": "🗓️", "/roster": "📅", "/leave": "🌴", "/payroll": "💰", "/advances": "💸", "/reports": "📊", "/users": "🔐", "/salary": "🧾", "/profile": "👤" };
   $("#nav").innerHTML = menu().map(([h, t]) => `<a href="#${h}" class="${path === h || (h !== "/dashboard" && path.startsWith(h)) ? "on" : ""}"><span class="ic">${IC[h] || "•"}</span><span>${esc(t)}</span></a>`).join("");
 }
 
@@ -226,6 +227,10 @@ document.addEventListener("submit", async (e) => {
   try { await H[f.dataset.submit](new FormData(f), f, e.submitter); }
   catch (err) { toast(errMsg(err), true); const le = $("#loginErr"); if (le && f.dataset.submit === "signIn") le.textContent = errMsg(err); }
   finally { btns.forEach((b) => (b.disabled = false)); }
+});
+document.addEventListener("change", async (e) => {
+  const el = e.target.closest("[data-change]"); if (!el) return;
+  try { await H[el.dataset.change](el.dataset, el); } catch (err) { toast(errMsg(err), true); }
 });
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-click]"); if (!b) return;
@@ -562,7 +567,14 @@ async function staffAttendance(qr) {
     q(sb.from("attendance_corrections").select("*").eq("employee_id", e.id).order("created_at", { ascending: false }).limit(10)),
   ]);
   const today = todayIST();
-  return `<h1>My attendance</h1><form class="inline" data-submit="filter" data-path="/attendance">${field("Month", monthInput("month", m))}</form><div style="height:12px"></div>` +
+  const [ro, shs] = await Promise.all([sb.from("roster").select("*").eq("employee_id", e.id).gte("work_date", today).lte("work_date", addDays(today, 6)), sb.from("shifts").select("id,name,start_time,end_time").eq("gym_id", e.gym_id)]);
+  const rmap = Object.fromEntries((ro.data || []).map((r) => [r.work_date, r])), smap = Object.fromEntries((shs.data || []).map((x) => [x.id, x]));
+  const rosterHtml = Array.from({ length: 7 }, (_, i) => addDays(today, i)).map((d) => {
+    const r = rmap[d], dow = new Date(d + "T00:00:00Z").getUTCDay(); const sh = smap[r ? r.shift_id : e.shift_id];
+    const t = r ? (r.is_off ? "Day off" : sh ? `${sh.name} ${sh.start_time.slice(0, 5)}–${sh.end_time.slice(0, 5)}` : "Working") : dow === e.weekly_off ? "Weekly off" : sh ? `${sh.name} ${sh.start_time.slice(0, 5)}–${sh.end_time.slice(0, 5)}` : "Working";
+    return `<tr><td>${dayHead(d)}</td><td class="${/off/i.test(t) ? "mut" : ""}">${esc(t)}</td></tr>`;
+  }).join("");
+  return `<h1>My attendance</h1><h2>My shifts – next 7 days</h2><div class="card flush"><table><tbody>${rosterHtml}</tbody></table></div><h2>Attendance record</h2><form class="inline" data-submit="filter" data-path="/attendance">${field("Month", monthInput("month", m))}</form><div style="height:12px"></div>` +
     table(["Date", "Status", "In", "Out", "Hours"], rows.map((a) => `<tr><td>${a.work_date}</td><td class="cap">${label(a.status)}${a.check_in && !a.check_out && a.work_date < today ? ' <span class="warn small">missing check-out</span>' : ""}</td><td>${timeIST(a.check_in)}</td><td>${timeIST(a.check_out)}</td><td>${a.check_in && a.check_out ? fmtDur(new Date(a.check_out) - new Date(a.check_in)) : "–"}</td></tr>`), "No records this month.") +
     `<h2>Request a correction</h2><p class="small mut">Forgot to check in or out? Tell your manager what the times should be.</p>
     <form class="form card" data-submit="corrRequest" data-emp="${e.id}" data-gym="${e.gym_id}">
@@ -992,6 +1004,61 @@ H.repCsv = () => {
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); a.download = `report-${lastReport.kind}-${lastReport.month}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 };
 H.repPrint = () => window.print();
+
+/* ================= duty roster ================= */
+const addDays = (d, n) => new Date(new Date(d + "T00:00:00Z").getTime() + n * 864e5).toISOString().slice(0, 10);
+const mondayOf = (d) => { const dt = new Date(d + "T00:00:00Z"); return addDays(d, -((dt.getUTCDay() + 6) % 7)); };
+const dayHead = (d) => new Date(d + "T00:00:00Z").toLocaleDateString("en-IN", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" });
+
+R(/^\/roster$/, async (_, qr) => {
+  if (isStaff()) return go("/attendance");
+  const gyms = await gymsList(); const gid = qr.gym || gyms[0]?.id;
+  if (!gid) return `<div class="card">No gyms yet.</div>`;
+  const wk = mondayOf(qr.week || todayIST()); const days = Array.from({ length: 7 }, (_, i) => addDays(wk, i));
+  const [emps, shifts, rows, hols] = await Promise.all([
+    q(sb.from("employees").select("id,full_name,weekly_off,shift_id").eq("gym_id", gid).eq("is_active", true).order("full_name")),
+    q(sb.from("shifts").select("id,name,start_time,end_time").eq("gym_id", gid).eq("is_active", true).order("start_time")),
+    q(sb.from("roster").select("*").eq("gym_id", gid).gte("work_date", days[0]).lte("work_date", days[6])),
+    q(sb.from("gym_holidays").select("holiday_date,name").eq("gym_id", gid).gte("holiday_date", days[0]).lte("holiday_date", days[6])),
+  ]);
+  const can = isAdmin() || S.perms.can_edit_attendance;
+  const by = {}; rows.forEach((r) => (by[r.employee_id + r.work_date] = r));
+  const holSet = new Set(hols.map((h) => h.holiday_date));
+  const sn = Object.fromEntries(shifts.map((x) => [x.id, x]));
+  const working = (e, d) => { const r = by[e.id + d]; if (r) return !r.is_off; return new Date(d + "T00:00:00Z").getUTCDay() !== e.weekly_off; };
+  const defLabel = (e, d) => (new Date(d + "T00:00:00Z").getUTCDay() === e.weekly_off ? "Weekly off" : sn[e.shift_id]?.name || "No shift");
+  const cell = (e, d) => {
+    const r = by[e.id + d], cur = r ? (r.is_off ? "off" : r.shift_id) : "";
+    if (!can) return r ? (r.is_off ? "Off" : esc(sn[r.shift_id]?.name || "Shift")) : `<span class="mut">${esc(defLabel(e, d))}</span>`;
+    return `<select class="input" style="min-width:112px;padding:6px 26px 6px 8px;${r ? "border-color:var(--pri);background-color:var(--pri-soft)" : ""}" data-change="rosterSet" data-emp="${e.id}" data-gym="${gid}" data-date="${d}">
+      ${opt("", "Default · " + defLabel(e, d), cur === "")}${opt("off", "Day off", cur === "off")}${shifts.map((x) => opt(x.id, `${x.name} ${x.start_time.slice(0, 5)}–${x.end_time.slice(0, 5)}`, cur === x.id)).join("")}</select>`;
+  };
+  return `<div class="row"><h1>Duty roster</h1>${can ? `<button class="btn ghost" data-click="rosterCopy" data-gym="${gid}" data-week="${wk}">Copy last week</button>` : ""}</div>
+  <form class="inline" data-submit="filter" data-path="/roster">
+    ${field("Gym", sel("gym", gyms.map((g) => [g.id, g.name]), gid, 'onchange="this.form.requestSubmit()"'))}
+    ${field("Week starting", inp("week", { type: "date", value: wk, onchange: "this.form.requestSubmit()" }))}
+    <a class="btn ghost" href="#/roster?gym=${gid}&week=${addDays(wk, -7)}">‹ Previous</a><a class="btn ghost" href="#/roster?gym=${gid}&week=${addDays(wk, 7)}">Next ›</a></form>
+  <p class="small mut" style="margin:10px 0">Everyone follows their normal shift and weekly off unless you change a day here. Attendance (late marking), leave and payroll all follow the roster. ${shifts.length ? "" : '<b class="warn">Add shifts to the gym first.</b>'}</p>
+  <div class="card flush"><table><thead><tr><th>Employee</th>${days.map((d) => `<th${holSet.has(d) ? ' title="Holiday"' : ""}>${dayHead(d)}${holSet.has(d) ? " 🎉" : ""}</th>`).join("")}</tr></thead><tbody>
+  ${emps.map((e) => `<tr><td style="white-space:nowrap"><b>${esc(e.full_name)}</b></td>${days.map((d) => `<td>${cell(e, d)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="8" class="mut">No active employees.</td></tr>`}
+  <tr><td class="small mut">Working that day</td>${days.map((d) => { const n = holSet.has(d) ? 0 : emps.filter((e) => working(e, d)).length; return `<td class="small ${n === 0 && !holSet.has(d) && emps.length ? "err" : ""}"><b>${n}</b>${n === 0 && !holSet.has(d) && emps.length ? " ⚠ nobody" : ""}</td>`; }).join("")}</tr>
+  </tbody></table></div>`;
+});
+H.rosterSet = async (d, el) => {
+  const val = el.value;
+  try {
+    if (val === "") await q(sb.from("roster").delete().eq("employee_id", d.emp).eq("work_date", d.date));
+    else await q(sb.from("roster").upsert({ employee_id: d.emp, gym_id: d.gym, work_date: d.date, is_off: val === "off", shift_id: val === "off" ? null : val, created_by: S.user.id }, { onConflict: "employee_id,work_date" }));
+    toast("Saved");
+  } catch (e) { toast(errMsg(e), true); route(); }
+};
+H.rosterCopy = async (d) => {
+  const prev = addDays(d.week, -7);
+  const rows = await q(sb.from("roster").select("employee_id,gym_id,shift_id,is_off,work_date").eq("gym_id", d.gym).gte("work_date", prev).lte("work_date", addDays(prev, 6)));
+  if (!rows.length) throw new Error("Last week has no changes to copy");
+  await q(sb.from("roster").upsert(rows.map((r) => ({ ...r, work_date: addDays(r.work_date, 7), created_by: S.user.id })), { onConflict: "employee_id,work_date" }));
+  toast("Copied"); route();
+};
 
 /* ================= boot ================= */
 (async () => {
