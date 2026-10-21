@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f9d76">
 <title>Gym Staff & Payroll</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
@@ -93,17 +94,41 @@ body.pubbody{background:#0b1730;color:#f1f5f9}body.pubbody::before{display:none}
 .pub-help{font-size:clamp(16px,3.4vw,22px);color:#e2e8f0;max-width:520px}
 @media print{header.top,nav#nav,.btn,.actions,form.inline,#toast{display:none!important}.card{border:0;box-shadow:none}body{background:#fff;color:#000}body::before{display:none}}
 @media(max-width:760px){
- .layout{flex-direction:column;gap:10px}
+ input.input,select.input,textarea.input{font-size:16px;min-height:46px}
+ .btn{min-height:46px;padding:11px 16px}
+ .inline>*{flex:1 1 100%;min-width:0}
+ .inline .btn{width:100%}
+ .actions{justify-content:stretch}.actions .btn{flex:1 1 140px}
+ input[type=checkbox]{width:20px;height:20px;vertical-align:middle;margin-right:6px}
+ td a,details summary{display:inline-block;padding:12px 6px}
+ nav#nav a{min-height:44px}
+ table.stack thead{display:none}
+ table.stack tr{display:block;padding:10px 14px;border-top:1px solid var(--bd)}
+ table.stack tbody tr:first-child{border-top:0}
+ table.stack td{display:flex;justify-content:space-between;align-items:center;gap:14px;border:0;padding:4px 0;text-align:right}
+ table.stack td::before{content:attr(data-label);color:var(--mut);font-size:12px;font-weight:600;text-align:left;flex-shrink:0}
+ table.stack td[data-label=""]::before{content:none}
+ table.stack td[data-label=""]{justify-content:flex-end}
+ table.stack td:empty{display:none}
+ table.stack td[colspan]{display:block;text-align:left}
+ .card{padding:14px}
+ body.staff nav#nav{bottom:calc(10px + env(safe-area-inset-bottom))}
+ .wrap{padding-left:max(14px,env(safe-area-inset-left));padding-right:max(14px,env(safe-area-inset-right))}
+ #toast{top:max(14px,env(safe-area-inset-top))}
+ .layout{flex-direction:column;align-items:stretch;gap:10px}
+ main#main{width:100%}
  nav#nav{width:100%;flex-direction:row;overflow-x:auto;padding:6px;position:static;border-radius:99px}
  nav#nav a{white-space:nowrap;border-radius:99px;font-size:13px;padding:8px 13px}
  nav#nav a .ic{font-size:15px;width:auto}
- body.staff nav#nav{position:fixed;left:10px;right:10px;bottom:10px;top:auto;z-index:10;border-radius:20px;padding:6px;gap:2px;justify-content:space-around;box-shadow:0 10px 30px #0f172a30}
+ body.staff nav#nav{position:fixed;width:auto;left:10px;right:10px;bottom:10px;top:auto;z-index:10;border-radius:20px;padding:6px;gap:2px;justify-content:space-around;box-shadow:0 10px 30px #0f172a30}
  body.staff nav#nav a{flex:1;flex-direction:column;gap:1px;padding:7px 2px;font-size:11px;border-radius:14px;text-align:center}
  body.staff nav#nav a .ic{font-size:19px}
  body.staff .wrap{padding-bottom:96px}
  .form,.g2{grid-template-columns:1fr}.g3{grid-template-columns:1fr 1fr}.g6{grid-template-columns:1fr 1fr 1fr}
  h1{font-size:20px}.num{font-size:23px}
- .brand .small{display:none}header.top .btn{padding:7px 12px;font-size:13px}
+ .brand .small{display:none}header.top .btn{padding:7px 12px;font-size:13px;min-height:40px;white-space:nowrap}
+ .brand b{font-size:15px}
+ nav#nav{scrollbar-width:none;scroll-snap-type:x proximity}nav#nav::-webkit-scrollbar{display:none}nav#nav a{scroll-snap-align:start}
  th,td{padding:9px 10px}
 }
 </style>
@@ -212,6 +237,12 @@ function renderNav(path) {
   $("#nav").innerHTML = menu().map(([h, t]) => `<a href="#${h}" class="${path === h || (h !== "/dashboard" && path.startsWith(h)) ? "on" : ""}"><span class="ic">${IC[h] || "•"}</span><span>${esc(t)}</span></a>`).join("");
 }
 
+const mobilize = (root) => {
+  root.querySelectorAll("table.stack").forEach((t) => {
+    const heads = [...t.querySelectorAll("thead th")].map((x) => x.textContent.trim());
+    t.querySelectorAll("tbody tr").forEach((tr) => [...tr.children].forEach((td, i) => { if (td.colSpan === 1) td.dataset.label = heads[i] || ""; }));
+  });
+};
 const routes = [];
 const R = (re, fn) => routes.push([re, fn]);
 
@@ -236,6 +267,7 @@ async function route() {
       if (location.hash.slice(1).split("?")[0] !== path && location.hash) { /* navigated away while loading */ }
       if (typeof out === "string") main.innerHTML = out;
       else if (out) { main.innerHTML = out.html; if (out.after) out.after(); }
+      mobilize(main);
     } catch (e) { main.innerHTML = `<div class="card err">Something went wrong: ${esc(errMsg(e))}</div>`; }
     return;
   }
@@ -285,7 +317,7 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 const deviceId = () => { try { let d = localStorage.getItem("gym_device"); if (!d) { d = crypto.randomUUID(); localStorage.setItem("gym_device", d); } return d; } catch { return "nodevice-" + navigator.userAgent.length; } };
 const istStamp = (date, time) => (time ? `${date}T${time}:00+05:30` : null);
 const table = (head, rows, empty = "Nothing here yet.") =>
-  `<div class="card flush"><table><thead><tr>${head.map((h) => `<th${h.startsWith(">") ? ' class="right"' : ""}>${esc(h.replace(/^>/, ""))}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.join("") : `<tr><td colspan="${head.length}" class="mut">${esc(empty)}</td></tr>`}</tbody></table></div>`;
+  `<div class="card flush"><table class="stack"><thead><tr>${head.map((h) => `<th${h.startsWith(">") ? ' class="right"' : ""}>${esc(h.replace(/^>/, ""))}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.join("") : `<tr><td colspan="${head.length}" class="mut">${esc(empty)}</td></tr>`}</tbody></table></div>`;
 
 /* ================= dashboard ================= */
 const PRESENT = ["present", "late", "half_day"];
@@ -913,7 +945,7 @@ R(/^\/users$/, async () => {
     ${field("Role", sel("role", [["staff", "Staff"], ["gym_manager", "Gym manager"]], "staff"))}
     ${field("Link to employee (for staff)", sel("employee_id", [["", "— none / link later —"], ...emps.map((e) => [e.id, `${e.full_name} (${e.employee_code})`])], ""), "full")}
     <div class="full"><button class="btn">Create login</button></div></form>` +
-    `<details class="card"><summary>What each role can do</summary><table><thead><tr><th>Feature</th><th>Admin</th><th>Gym manager</th><th>Staff</th></tr></thead><tbody>${[["View gyms", "All", "Assigned only", "–"], ["Add / edit employees", "Yes", "If permitted", "No"], ["View attendance", "All", "Assigned gyms", "Own"], ["Correct attendance", "Yes", "If permitted", "Request"], ["Approve leave", "Yes", "If permitted", "Request"], ["Generate / approve payroll", "Yes", "If permitted", "No"], ["View salary", "All", "If permitted", "Own"], ["Set salary and rules", "Yes", "If permitted", "No"], ["Manage users", "Yes", "No", "No"]].map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table><p class="small mut">These rules are enforced by the database itself, not only by hiding menus.</p></details>` +
+    `<details class="card"><summary>What each role can do</summary><div style="overflow-x:auto"><table><thead><tr><th>Feature</th><th>Admin</th><th>Gym manager</th><th>Staff</th></tr></thead><tbody>${[["View gyms", "All", "Assigned only", "–"], ["Add / edit employees", "Yes", "If permitted", "No"], ["View attendance", "All", "Assigned gyms", "Own"], ["Correct attendance", "Yes", "If permitted", "Request"], ["Approve leave", "Yes", "If permitted", "Request"], ["Generate / approve payroll", "Yes", "If permitted", "No"], ["View salary", "All", "If permitted", "Own"], ["Set salary and rules", "Yes", "If permitted", "No"], ["Manage users", "Yes", "No", "No"]].map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div><p class="small mut">These rules are enforced by the database itself, not only by hiding menus.</p></details>` +
     table(["Name", "Email", "Role", "Status", ""], users.map((u) => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.email || "")}</td><td>${ROLE[u.role]}</td><td>${u.is_active ? "Active" : '<span class="mut">Inactive</span>'}</td><td class="right"><a href="#/users/${u.id}">Open</a></td></tr>`));
 });
 H.userCreate = async (fd) => {
