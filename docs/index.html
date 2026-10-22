@@ -92,8 +92,27 @@ body.pubbody{background:#0b1730;color:#f1f5f9}body.pubbody::before{display:none}
 .pub-qr svg{width:100%;height:auto;display:block}
 .pub-count b{font-size:clamp(20px,4vw,28px);color:#34d399}
 .pub-help{font-size:clamp(16px,3.4vw,22px);color:#e2e8f0;max-width:520px}
+#tabbar,#sheet{display:none}
 @media print{header.top,nav#nav,.btn,.actions,form.inline,#toast{display:none!important}.card{border:0;box-shadow:none}body{background:#fff;color:#000}body::before{display:none}}
 @media(max-width:760px){
+ nav#nav{display:none!important}
+ header.top>.brand:last-child .small,header.top>.brand:last-child .btn{display:none}
+ #tabbar{display:flex;position:fixed;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:20;background:var(--card);border:1px solid var(--bd);border-radius:22px;padding:6px;box-shadow:0 10px 30px #0f172a33}
+ #tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:7px 2px;min-height:56px;font-size:11px;font-weight:600;border-radius:16px;color:var(--mut);text-decoration:none;text-align:center}
+ #tabbar a .ic{font-size:20px;line-height:1.2}
+ #tabbar a.on{background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff}
+ #sheet:not([hidden]){display:block;position:fixed;inset:0;z-index:40}
+ .sheet-bg{position:absolute;inset:0;background:#020617a8}
+ .sheet-body{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-radius:24px 24px 0 0;padding:10px 16px calc(18px + env(safe-area-inset-bottom));max-height:85vh;overflow:auto;animation:up .18s ease-out}
+ @keyframes up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
+ .sheet-grip{width:44px;height:5px;border-radius:3px;background:var(--bd);margin:0 auto 14px}
+ .sheet-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+ .sheet-grid a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:84px;padding:10px 4px;border-radius:16px;background:var(--hov);color:var(--fg);text-decoration:none;font-size:12.5px;font-weight:600;text-align:center}
+ .sheet-grid a .ic{font-size:24px}
+ .sheet-grid a.on{background:var(--pri-soft);color:var(--pri);box-shadow:inset 0 0 0 2px var(--pri)}
+ .sheet-user{display:flex;align-items:center;gap:10px;margin-top:16px;padding-top:14px;border-top:1px solid var(--bd)}
+ .sheet-user .btn{min-height:42px;padding:8px 12px}
+ .wrap{padding-bottom:104px!important}
  input.input,select.input,textarea.input{font-size:16px;min-height:46px}
  .btn{min-height:46px;padding:11px 16px}
  .inline>*{flex:1 1 100%;min-width:0}
@@ -229,11 +248,21 @@ function renderShell() {
   document.body.classList.toggle("staff", isStaff());
   $("#app").innerHTML = `<div class="wrap"><header class="top"><div class="brand"><div class="logo">🏋️</div><div><b>Gym Staff &amp; Payroll</b><div class="small mut">${ROLE[S.profile.role]}</div></div></div>
   <div class="brand"><div class="avatar">${esc((S.profile.full_name || "?").trim()[0].toUpperCase())}</div><span class="small" style="font-weight:600">${esc(S.profile.full_name)}</span><button class="btn ghost" data-click="signOut">Sign out</button></div></header>
-  <div class="layout"><nav id="nav"></nav><main id="main"></main></div></div>`;
+  <div class="layout"><nav id="nav"></nav><main id="main"></main></div></div>
+  <div id="tabbar"></div><div id="sheet" hidden></div>`;
 }
 
 function renderNav(path) {
   const IC = { "/dashboard": "🏠", "/gyms": "🏢", "/employees": "👥", "/attendance": "🗓️", "/roster": "📅", "/pins": "🔢", "/leave": "🌴", "/payroll": "💰", "/advances": "💸", "/reports": "📊", "/users": "🔐", "/salary": "🧾", "/profile": "👤" };
+  const items = menu(), on = (h) => path === h || (h !== "/dashboard" && path.startsWith(h));
+  const primary = isStaff() ? items : ["/dashboard", "/attendance", "/employees", items.some((x) => x[0] === "/payroll") ? "/payroll" : "/leave"].map((k) => items.find((x) => x[0] === k)).filter(Boolean);
+  const inPrimary = primary.some(([h]) => on(h));
+  $("#tabbar").innerHTML = primary.map(([h, t]) => `<a href="#${h}" class="${on(h) ? "on" : ""}"><span class="ic">${IC[h] || "•"}</span><span>${esc(t.replace("Advances & bonus", "Advances").replace("Users & permissions", "Users"))}</span></a>`).join("") +
+    (isStaff() ? "" : `<a href="#" data-click="moreOpen" class="${inPrimary ? "" : "on"}"><span class="ic">☰</span><span>More</span></a>`);
+  $("#sheet").innerHTML = `<div class="sheet-bg" data-click="moreClose"></div><div class="sheet-body"><div class="sheet-grip"></div>
+    <div class="sheet-grid">${items.map(([h, t]) => `<a href="#${h}" data-click="moreClose" class="${on(h) ? "on" : ""}"><span class="ic">${IC[h] || "•"}</span><span>${esc(t)}</span></a>`).join("")}</div>
+    <div class="sheet-user"><div class="avatar">${esc((S.profile.full_name || "?").trim()[0].toUpperCase())}</div><div style="flex:1;min-width:0"><b>${esc(S.profile.full_name)}</b><div class="small mut">${ROLE[S.profile.role]}</div></div><a href="#/profile" data-click="moreClose" class="btn ghost">Profile</a><button class="btn ghost" data-click="signOut">Sign out</button></div></div>`;
+  $("#sheet").hidden = true;
   $("#nav").innerHTML = menu().map(([h, t]) => `<a href="#${h}" class="${path === h || (h !== "/dashboard" && path.startsWith(h)) ? "on" : ""}"><span class="ic">${IC[h] || "•"}</span><span>${esc(t)}</span></a>`).join("");
 }
 
@@ -290,6 +319,7 @@ document.addEventListener("change", async (e) => {
 });
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-click]"); if (!b) return;
+  if (b.tagName === "A" && b.getAttribute("href") === "#") e.preventDefault();
   try { await H[b.dataset.click](b.dataset, b); } catch (err) { toast(errMsg(err), true); }
 });
 window.addEventListener("hashchange", route);
@@ -300,6 +330,8 @@ H.signIn = async (fd) => {
   if (error) throw new Error("Wrong email or password");
   if (await loadSession()) { renderShell(); if (!location.hash) go("/dashboard"); route(); } else renderLogin();
 };
+H.moreOpen = () => { $("#sheet").hidden = false; };
+H.moreClose = () => { $("#sheet").hidden = true; };
 H.signOut = async () => { await sb.auth.signOut(); S.user = null; location.hash = ""; renderLogin(); };
 
 /* ================= shared data helpers ================= */
