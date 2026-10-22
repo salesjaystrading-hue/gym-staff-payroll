@@ -93,6 +93,9 @@ body.pubbody{background:#0b1730;color:#f1f5f9}body.pubbody::before{display:none}
 .pub-count b{font-size:clamp(20px,4vw,28px);color:#34d399}
 .pub-help{font-size:clamp(16px,3.4vw,22px);color:#e2e8f0;max-width:520px}
 #tabbar,#sheet{display:none}
+.qm{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--bd);background:var(--card);color:var(--fg);padding:9px 14px;border-radius:99px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;min-height:40px;transition:.12s}
+.chip:hover{background:var(--hov)}.chip.on{background:var(--pri);border-color:var(--pri);color:#fff}
 @media print{header.top,nav#nav,.btn,.actions,form.inline,#toast{display:none!important}.card{border:0;box-shadow:none}body{background:#fff;color:#000}body::before{display:none}}
 @media(max-width:760px){
  nav#nav{display:none!important}
@@ -618,6 +621,7 @@ R(/^\/attendance$/, async (_, qr) => {
   <form class="inline" data-submit="filter" data-path="/attendance">
     ${field("Gym", sel("gym", gyms.map((g) => [g.id, g.name]), gid, 'onchange="this.form.requestSubmit()"'))}
     ${field("Date", inp("date", { type: "date", value: date, onchange: "this.form.requestSubmit()" }))}</form>
+  ${canEdit && counts.none ? `<div style="margin:12px 0"><button class="btn" data-click="markAllPresent" data-gym="${gid}" data-date="${date}">Mark all ${counts.none} unmarked as present</button></div>` : ""}
   <div class="grid g3" style="margin:12px 0"><div class="card" style="margin:0"><div class="num ok">${counts.present}</div><div class="small mut">Present</div></div><div class="card" style="margin:0"><div class="num">${counts.absent + counts.leave}</div><div class="small mut">Absent / leave</div></div><div class="card" style="margin:0"><div class="num ${counts.none ? "warn" : ""}">${counts.none}</div><div class="small mut">Not marked</div></div></div>
   ${corr.length ? `<h2>Correction requests (${corr.length})</h2>${corr.map((c) => `<div class="card"><div class="row" style="margin:0 0 6px"><b>${esc(c.employees?.full_name || "")}</b><span class="small">${c.work_date}</span></div>
     <div class="small">In ${timeIST(c.check_in)} · Out ${timeIST(c.check_out)}</div><div class="small mut">${esc(c.reason)}</div>
@@ -631,19 +635,34 @@ R(/^\/attendance$/, async (_, qr) => {
         <span class="small">${a ? `<b class="cap">${label(a.status)}</b> · in ${timeIST(a.check_in)} · out ${timeIST(a.check_out)}${hrs ? " · " + hrs : ""} · ${a.source}` : '<span class="warn">Not marked</span>'}</span></div>
         ${missing ? `<div class="small warn" style="margin-bottom:6px">⚠ Missing check-out</div>` : ""}
         ${a?.note ? `<div class="small mut" style="margin-bottom:8px">Note: ${esc(a.note)}</div>` : ""}
-        ${canEdit ? `<form class="inline" data-submit="markAtt" data-emp="${e.id}" data-gym="${gid}" data-date="${date}">
+        ${canEdit ? `<div class="qm" data-emp="${e.id}" data-gym="${gid}" data-date="${date}">${[["present", "Present"], ["late", "Late"], ["half_day", "Half day"], ["absent", "Absent"], ["paid_leave", "Paid leave"], ["unpaid_leave", "Unpaid leave"], ["weekly_off", "Week off"]].map(([k, t]) => `<button type="button" class="chip ${a?.status === k ? "on" : ""}" data-click="quickMark" data-emp="${e.id}" data-gym="${gid}" data-date="${date}" data-status="${k}">${t}</button>`).join("")}</div>
+        <details style="margin-top:6px"><summary>Enter exact times / add a note</summary>
+        <form class="inline" style="margin-top:8px" data-submit="markAtt" data-emp="${e.id}" data-gym="${gid}" data-date="${date}">
           ${field("Status", sel("status", STATUS.map((x) => [x, label(x)]), a?.status || "present"))}
           ${field("In", inp("in", { type: "time", value: hhmm(a?.check_in) }))}${field("Out", inp("out", { type: "time", value: hhmm(a?.check_out) }))}
-          ${field("Reason (required)", inp("note", { required: true, placeholder: "Why are you marking/changing this?" }))}
-          <button class="btn">Save</button></form>` : ""}</div>`;
+          ${field("Note / reason", inp("note", { placeholder: "Optional" }))}
+          <button class="btn">Save</button></form></details>` : ""}</div>`;
     }).join("") : `<div class="card mut">No active employees in this gym.</div>`);
 });
+H.quickMark = async (d) => {
+  await q(sb.from("attendance").upsert({ employee_id: d.emp, gym_id: d.gym, work_date: d.date, status: d.status, source: "manual", note: "Marked by manager", updated_by: S.user.id, updated_at: new Date().toISOString() }, { onConflict: "employee_id,work_date" }));
+  toast("Marked " + label(d.status)); route();
+};
+H.markAllPresent = async (d) => {
+  if (!confirm("Mark every unmarked employee as present for " + d.date + "?")) return;
+  const [emps, atts] = await Promise.all([q(sb.from("employees").select("id").eq("gym_id", d.gym).eq("is_active", true)), q(sb.from("attendance").select("employee_id").eq("gym_id", d.gym).eq("work_date", d.date))]);
+  const have = new Set(atts.map((a) => a.employee_id));
+  const rows = emps.filter((e) => !have.has(e.id)).map((e) => ({ employee_id: e.id, gym_id: d.gym, work_date: d.date, status: "present", source: "manual", note: "Marked by manager", updated_by: S.user.id }));
+  if (!rows.length) return toast("Everyone is already marked");
+  await q(sb.from("attendance").upsert(rows, { onConflict: "employee_id,work_date", ignoreDuplicates: true }));
+  toast(rows.length + " marked present"); route();
+};
 H.corrDecide = async (fd, f, btn) => { await q(sb.rpc("decide_correction", { p_id: f.dataset.id, p_approve: btn?.value === "approve", p_note: v(fd, "note") })); toast("Done"); route(); };
 H.markAtt = async (fd, f) => {
   const d = f.dataset, inT = s(fd, "in"), outT = s(fd, "out");
   let cin = istStamp(d.date, inT), cout = istStamp(d.date, outT);
   if (cin && cout && cout <= cin) cout = new Date(new Date(cout).getTime() + 864e5).toISOString(); // overnight
-  await q(sb.from("attendance").upsert({ employee_id: d.emp, gym_id: d.gym, work_date: d.date, status: s(fd, "status"), check_in: cin, check_out: cout, source: "manual", note: s(fd, "note"), updated_by: S.user.id, updated_at: new Date().toISOString() }, { onConflict: "employee_id,work_date" }));
+  await q(sb.from("attendance").upsert({ employee_id: d.emp, gym_id: d.gym, work_date: d.date, status: s(fd, "status"), check_in: cin, check_out: cout, source: "manual", note: v(fd, "note") || "Marked by manager", updated_by: S.user.id, updated_at: new Date().toISOString() }, { onConflict: "employee_id,work_date" }));
   toast("Saved"); route();
 };
 
